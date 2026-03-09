@@ -1,0 +1,46 @@
+# ──── Python ─────────────────────────────────────────────────────────────────
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+*.dist-info/
+
+# ──── Node ────────────────────────────────────────────────────────────────────
+node_modules/
+Platform/app/dist/
+Platform/app/.vite/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# ──── Environment / Secrets ───────────────────────────────────────────────────
+.env
+.env.local
+.env.*.local
+
+# ──── SQLite DB (runtime data, not versioned) ─────────────────────────────────
+*.db
+*.db-shm
+*.db-wal
+
+# ──── Large binary / dataset files ───────────────────────────────────────────
+Platform/backend/data/*.h5
+Platform/backend/data/*.arrow
+Platform/backend/data/aloha_mobile_shrimp/train/
+Platform/backend/data/real_episodes/
+Platform/backend/data/genrobot_open_dataset/
+Platform/backend/uploads/
+Platform/backend/das-datakit/
+
+# ──── OS ──────────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+
+# ──── IDE ─────────────────────────────────────────────────────────────────────
+.vscode/settings.json
+.idea/
