@@ -304,6 +304,83 @@ app.post('/api/autoannotation/batch', async (req, res) => {
   res.json({ success: true, count: newAnnotations.length, annotations: newAnnotations });
 });
 
+// ========== FRAME EXTRACTION API ==========
+
+/**
+ * Extract frames from video and serve as static images for grounding display
+ * POST /api/frames/extract
+ * Body: { videoPath, numFrames }
+ */
+app.post('/api/frames/extract', async (req, res) => {
+  const { videoPath, numFrames = 32 } = req.body;
+
+  if (!videoPath || !fs.existsSync(videoPath)) {
+    return res.status(404).json({ error: 'Video file not found' });
+  }
+
+  const videoHash = require('crypto').createHash('md5').update(videoPath).digest('hex').slice(0, 12);
+  const framesDir = path.join(__dirname, 'uploads', 'frames', videoHash);
+
+  // If already extracted, return cached
+  if (fs.existsSync(framesDir)) {
+    const existing = fs.readdirSync(framesDir).filter(f => f.endsWith('.jpg')).sort();
+    if (existing.length > 0) {
+      return res.json({
+        success: true,
+        cached: true,
+        framesDir: `/uploads/frames/${videoHash}`,
+        frames: existing.map((f, i) => ({
+          index: i,
+          filename: f,
+          url: `/uploads/frames/${videoHash}/${f}`,
+        })),
+      });
+    }
+  }
+
+  fs.mkdirSync(framesDir, { recursive: true });
+
+  try {
+    // Use ffmpeg to extract frames
+    const ffmpeg = spawn('ffmpeg', [
+      '-i', videoPath,
+      '-vf', `select='not(mod(n\\,${Math.max(1, Math.floor(30 / (numFrames / 10)))}))`,
+      '-vsync', 'vfr',
+      '-frames:v', numFrames.toString(),
+      '-q:v', '3',
+      path.join(framesDir, 'frame_%04d.jpg'),
+    ]);
+
+    let ffmpegError = '';
+    ffmpeg.stderr.on('data', (data) => { ffmpegError += data.toString(); });
+
+    ffmpeg.on('close', (code) => {
+      const extracted = fs.readdirSync(framesDir).filter(f => f.endsWith('.jpg')).sort();
+      if (extracted.length === 0) {
+        return res.status(500).json({ error: 'Frame extraction failed', details: ffmpegError });
+      }
+
+      res.json({
+        success: true,
+        cached: false,
+        framesDir: `/uploads/frames/${videoHash}`,
+        frames: extracted.map((f, i) => ({
+          index: i,
+          filename: f,
+          url: `/uploads/frames/${videoHash}/${f}`,
+        })),
+      });
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Serve extracted frames as static files
+app.use('/uploads/frames', express.static(path.join(__dirname, 'uploads', 'frames')));
+
+// ========== END FRAME EXTRACTION API ==========
+
 // ========== STRUCTURED VQA ANALYSIS API ==========
 
 /**
@@ -326,13 +403,52 @@ app.post('/api/vlm/structured-analysis', async (req, res) => {
     return res.status(404).json({ error: `Video file not found: ${videoPath}` });
   }
 
+  // Step 1: Extract frames for grounding
+  const videoHash = require('crypto').createHash('md5').update(videoPath).digest('hex').slice(0, 12);
+  const framesDir = path.join(__dirname, 'uploads', 'frames', videoHash);
+  let frameImageUrls = [];
+
+  if (!fs.existsSync(framesDir)) {
+    fs.mkdirSync(framesDir, { recursive: true });
+  }
+
+  const existingFrames = fs.existsSync(framesDir)
+    ? fs.readdirSync(framesDir).filter(f => f.endsWith('.jpg')).sort()
+    : [];
+
+  if (existingFrames.length > 0) {
+    frameImageUrls = existingFrames.map(f => `/uploads/frames/${videoHash}/${f}`);
+  } else {
+    // Extract frames with ffmpeg (synchronous wait for grounding)
+    try {
+      await new Promise((resolve, reject) => {
+        const ff = spawn('ffmpeg', [
+          '-i', videoPath,
+          '-vf', `select='not(mod(n\\,${Math.max(1, Math.floor(30 / (numFrames / 10)))}))`,
+          '-vsync', 'vfr',
+          '-frames:v', numFrames.toString(),
+          '-q:v', '3',
+          path.join(framesDir, 'frame_%04d.jpg'),
+        ]);
+        ff.on('close', (code) => code === 0 ? resolve() : reject(new Error(`ffmpeg exit ${code}`)));
+        ff.on('error', reject);
+      });
+      const extracted = fs.readdirSync(framesDir).filter(f => f.endsWith('.jpg')).sort();
+      frameImageUrls = extracted.map(f => `/uploads/frames/${videoHash}/${f}`);
+    } catch (err) {
+      console.warn('Frame extraction failed, continuing without grounding images:', err.message);
+    }
+  }
+
+  // Step 2: Run VLM analysis with grounding-aware prompt
   try {
-    // Spawn Python process to run VLM analysis
     const pythonScript = path.join(__dirname, 'vlm_video_analyzer.py');
     const args = [provider, apiKey, videoPath, numFrames.toString()];
     if (model) {
       args.push(model);
     }
+    // Pass frames dir for grounding reference
+    args.push('--frames-dir', framesDir);
 
     const pythonProcess = spawn('python', [pythonScript, ...args]);
 
@@ -361,7 +477,12 @@ app.post('/api/vlm/structured-analysis', async (req, res) => {
 
       try {
         const result = JSON.parse(resultData);
-        
+
+        // Inject frame_image_urls into metadata for frontend grounding display
+        if (result.metadata) {
+          result.metadata.frame_image_urls = frameImageUrls;
+        }
+
         // Save analysis to SQLite
         const annotationId = `ann_vqa_${Date.now()}`;
         const newAnnotation = {

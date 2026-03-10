@@ -38,7 +38,9 @@ import type {
   StructuredVQAAnalysis,
   VQAAnnotationRecord,
   VQAConfidenceScores,
+  VisualGrounding,
 } from '@/types';
+import { GroundingBadge, GroundingDetail, TemporalConsistencyAlert } from '@/components/GroundingOverlay';
 
 // ─── VQA Category Configs ────────────────────────────────────────────────────
 const VQA_CATEGORIES = [
@@ -171,7 +173,8 @@ function MotionBadge({ type }: { type: string }) {
 
 // ─── Category Section Components ─────────────────────────────────────────────
 
-function TemporalView({ data }: { data: StructuredVQAAnalysis['temporal'] }) {
+function TemporalView({ data, frameImageUrls }: { data: StructuredVQAAnalysis['temporal']; frameImageUrls?: string[] }) {
+  const [expandedGrounding, setExpandedGrounding] = useState<VisualGrounding | null>(null);
   return (
     <div className="space-y-4">
       <div>
@@ -186,13 +189,28 @@ function TemporalView({ data }: { data: StructuredVQAAnalysis['temporal'] }) {
               <div className="ml-2 p-2.5 rounded-lg bg-blue-50 dark:bg-blue-950 border border-blue-100 dark:border-blue-900">
                 <div className="flex items-center justify-between mb-1">
                   <span className="font-medium text-sm">{item.action}</span>
-                  <Badge variant="outline" className="text-xs font-mono">{item.timestamp}</Badge>
+                  <div className="flex items-center gap-1.5">
+                    {item.grounding && (
+                      <GroundingBadge
+                        grounding={item.grounding}
+                        frameImageUrls={frameImageUrls}
+                        colorClass="text-blue-500"
+                        onClickView={setExpandedGrounding}
+                      />
+                    )}
+                    <Badge variant="outline" className="text-xs font-mono">{item.timestamp}</Badge>
+                  </div>
                 </div>
                 <p className="text-xs text-muted-foreground">{item.description}</p>
                 {item.frame_range && (
                   <span className="text-xs text-blue-500 mt-1 block">
                     Frames {item.frame_range[0]}–{item.frame_range[1]}
                   </span>
+                )}
+                {expandedGrounding === item.grounding && item.grounding && (
+                  <div className="mt-2">
+                    <GroundingDetail grounding={item.grounding} frameImageUrls={frameImageUrls} />
+                  </div>
                 )}
               </div>
             </div>
@@ -216,7 +234,8 @@ function TemporalView({ data }: { data: StructuredVQAAnalysis['temporal'] }) {
   );
 }
 
-function SpatialView({ data }: { data: StructuredVQAAnalysis['spatial'] }) {
+function SpatialView({ data, frameImageUrls }: { data: StructuredVQAAnalysis['spatial']; frameImageUrls?: string[] }) {
+  const [expandedGrounding, setExpandedGrounding] = useState<VisualGrounding | null>(null);
   return (
     <div className="space-y-4">
       <div>
@@ -228,9 +247,24 @@ function SpatialView({ data }: { data: StructuredVQAAnalysis['spatial'] }) {
             <div key={i} className="p-2.5 rounded-lg bg-green-50 dark:bg-green-950 border border-green-100 dark:border-green-900">
               <div className="flex items-center justify-between mb-1">
                 <span className="font-medium text-sm">{rel.relationship}</span>
-                <Badge variant="outline" className="text-xs font-mono">{rel.timestamp}</Badge>
+                <div className="flex items-center gap-1.5">
+                  {rel.grounding && (
+                    <GroundingBadge
+                      grounding={rel.grounding}
+                      frameImageUrls={frameImageUrls}
+                      colorClass="text-green-500"
+                      onClickView={setExpandedGrounding}
+                    />
+                  )}
+                  <Badge variant="outline" className="text-xs font-mono">{rel.timestamp}</Badge>
+                </div>
               </div>
               <p className="text-xs text-muted-foreground">{rel.details}</p>
+              {expandedGrounding === rel.grounding && rel.grounding && (
+                <div className="mt-2">
+                  <GroundingDetail grounding={rel.grounding} frameImageUrls={frameImageUrls} />
+                </div>
+              )}
             </div>
           ))}
         </div>
@@ -247,7 +281,8 @@ function SpatialView({ data }: { data: StructuredVQAAnalysis['spatial'] }) {
   );
 }
 
-function AttributeView({ data }: { data: StructuredVQAAnalysis['attribute'] }) {
+function AttributeView({ data, frameImageUrls }: { data: StructuredVQAAnalysis['attribute']; frameImageUrls?: string[] }) {
+  const [expandedGrounding, setExpandedGrounding] = useState<VisualGrounding | null>(null);
   return (
     <div className="space-y-3">
       {data?.objects?.map((obj, i) => (
@@ -255,6 +290,14 @@ function AttributeView({ data }: { data: StructuredVQAAnalysis['attribute'] }) {
           <div className="flex items-center gap-2 mb-2">
             <Tag className="w-4 h-4 text-purple-500" />
             <span className="font-semibold text-sm">{obj.name}</span>
+            {obj.grounding && (
+              <GroundingBadge
+                grounding={obj.grounding}
+                frameImageUrls={frameImageUrls}
+                colorClass="text-purple-500"
+                onClickView={setExpandedGrounding}
+              />
+            )}
           </div>
           <div className="grid grid-cols-2 gap-1.5 text-xs mb-2">
             {Object.entries(obj.properties || {}).map(([key, val]) => (
@@ -276,13 +319,19 @@ function AttributeView({ data }: { data: StructuredVQAAnalysis['attribute'] }) {
               </div>
             </div>
           )}
+          {expandedGrounding === obj.grounding && obj.grounding && (
+            <div className="mt-2">
+              <GroundingDetail grounding={obj.grounding} frameImageUrls={frameImageUrls} />
+            </div>
+          )}
         </div>
       ))}
     </div>
   );
 }
 
-function MechanicsView({ data }: { data: StructuredVQAAnalysis['mechanics'] }) {
+function MechanicsView({ data, frameImageUrls }: { data: StructuredVQAAnalysis['mechanics']; frameImageUrls?: string[] }) {
+  const [expandedGrounding, setExpandedGrounding] = useState<VisualGrounding | null>(null);
   return (
     <div className="space-y-4">
       <div>
@@ -296,6 +345,14 @@ function MechanicsView({ data }: { data: StructuredVQAAnalysis['mechanics'] }) {
                 <div className="flex items-center gap-2">
                   <span className="font-medium text-sm">{c.contact_type}</span>
                   <ForceBadge level={c.force_level} />
+                  {c.grounding && (
+                    <GroundingBadge
+                      grounding={c.grounding}
+                      frameImageUrls={frameImageUrls}
+                      colorClass="text-orange-500"
+                      onClickView={setExpandedGrounding}
+                    />
+                  )}
                 </div>
                 <Badge variant="outline" className="text-xs font-mono">{c.timestamp}</Badge>
               </div>
@@ -303,6 +360,11 @@ function MechanicsView({ data }: { data: StructuredVQAAnalysis['mechanics'] }) {
                 <p>接触点: {c.contact_points}</p>
                 <p>接触面积: {c.area}</p>
               </div>
+              {expandedGrounding === c.grounding && c.grounding && (
+                <div className="mt-2">
+                  <GroundingDetail grounding={c.grounding} frameImageUrls={frameImageUrls} />
+                </div>
+              )}
             </div>
           ))}
         </div>
@@ -319,7 +381,8 @@ function MechanicsView({ data }: { data: StructuredVQAAnalysis['mechanics'] }) {
   );
 }
 
-function ReasoningView({ data }: { data: StructuredVQAAnalysis['reasoning'] }) {
+function ReasoningView({ data, frameImageUrls }: { data: StructuredVQAAnalysis['reasoning']; frameImageUrls?: string[] }) {
+  const [expandedGrounding, setExpandedGrounding] = useState<VisualGrounding | null>(null);
   return (
     <div className="space-y-4">
       <div>
@@ -329,13 +392,28 @@ function ReasoningView({ data }: { data: StructuredVQAAnalysis['reasoning'] }) {
         <div className="space-y-2">
           {data?.action_justifications?.map((j, i) => (
             <div key={i} className="p-2.5 rounded-lg bg-pink-50 dark:bg-pink-950 border border-pink-100 dark:border-pink-900">
-              <p className="font-medium text-sm mb-1">{j.action}</p>
+              <div className="flex items-center justify-between mb-1">
+                <p className="font-medium text-sm">{j.action}</p>
+                {j.grounding && (
+                  <GroundingBadge
+                    grounding={j.grounding}
+                    frameImageUrls={frameImageUrls}
+                    colorClass="text-pink-500"
+                    onClickView={setExpandedGrounding}
+                  />
+                )}
+              </div>
               <p className="text-xs text-muted-foreground mb-1.5">{j.reason}</p>
               {j.constraints?.length > 0 && (
                 <div className="flex flex-wrap gap-1">
                   {j.constraints.map((c, k) => (
                     <Badge key={k} variant="outline" className="text-xs">{c}</Badge>
                   ))}
+                </div>
+              )}
+              {expandedGrounding === j.grounding && j.grounding && (
+                <div className="mt-2">
+                  <GroundingDetail grounding={j.grounding} frameImageUrls={frameImageUrls} />
                 </div>
               )}
             </div>
@@ -354,7 +432,7 @@ function ReasoningView({ data }: { data: StructuredVQAAnalysis['reasoning'] }) {
   );
 }
 
-function SummaryView({ data }: { data: StructuredVQAAnalysis['summary'] }) {
+function SummaryView({ data, frameImageUrls }: { data: StructuredVQAAnalysis['summary']; frameImageUrls?: string[] }) {
   return (
     <div className="space-y-4">
       <div className="p-3 rounded-lg bg-teal-50 dark:bg-teal-950 border border-teal-100 dark:border-teal-900">
@@ -374,10 +452,20 @@ function SummaryView({ data }: { data: StructuredVQAAnalysis['summary'] }) {
         <div className="p-2.5 rounded border bg-muted/30">
           <p className="text-xs font-medium text-muted-foreground mb-1">初始状态</p>
           <p className="text-sm">{data?.start_state}</p>
+          {data?.grounding_start && (
+            <div className="mt-1.5">
+              <GroundingDetail grounding={data.grounding_start} frameImageUrls={frameImageUrls} />
+            </div>
+          )}
         </div>
         <div className="p-2.5 rounded border bg-muted/30">
           <p className="text-xs font-medium text-muted-foreground mb-1">结束状态</p>
           <p className="text-sm">{data?.end_state}</p>
+          {data?.grounding_end && (
+            <div className="mt-1.5">
+              <GroundingDetail grounding={data.grounding_end} frameImageUrls={frameImageUrls} />
+            </div>
+          )}
         </div>
       </div>
       {data?.key_milestones?.length > 0 && (
@@ -397,7 +485,8 @@ function SummaryView({ data }: { data: StructuredVQAAnalysis['summary'] }) {
   );
 }
 
-function TrajectoryView({ data }: { data: StructuredVQAAnalysis['trajectory'] }) {
+function TrajectoryView({ data, frameImageUrls }: { data: StructuredVQAAnalysis['trajectory']; frameImageUrls?: string[] }) {
+  const [expandedGrounding, setExpandedGrounding] = useState<VisualGrounding | null>(null);
   return (
     <div className="space-y-4">
       <div>
@@ -411,6 +500,14 @@ function TrajectoryView({ data }: { data: StructuredVQAAnalysis['trajectory'] })
                 <span className="font-medium text-sm">{seg.segment}</span>
                 <MotionBadge type={seg.motion_type} />
                 <Badge variant="secondary" className="text-xs">{seg.velocity}</Badge>
+                {seg.grounding && (
+                  <GroundingBadge
+                    grounding={seg.grounding}
+                    frameImageUrls={frameImageUrls}
+                    colorClass="text-indigo-500"
+                    onClickView={setExpandedGrounding}
+                  />
+                )}
                 <Badge variant="outline" className="text-xs font-mono ml-auto">{seg.time_range}</Badge>
               </div>
               {seg.waypoints?.length > 0 && (
@@ -420,6 +517,11 @@ function TrajectoryView({ data }: { data: StructuredVQAAnalysis['trajectory'] })
                       {wp}
                     </span>
                   ))}
+                </div>
+              )}
+              {expandedGrounding === seg.grounding && seg.grounding && (
+                <div className="mt-2">
+                  <GroundingDetail grounding={seg.grounding} frameImageUrls={frameImageUrls} />
                 </div>
               )}
             </div>
@@ -1049,13 +1151,13 @@ export default function StructuredVQA() {
                     <CardContent className="pt-3">
                       <ScrollArea className="h-[calc(100vh-380px)]">
                         <div className="pr-3">
-                          {activeCategory === 'temporal' && <TemporalView data={analysis.temporal} />}
-                          {activeCategory === 'spatial' && <SpatialView data={analysis.spatial} />}
-                          {activeCategory === 'attribute' && <AttributeView data={analysis.attribute} />}
-                          {activeCategory === 'mechanics' && <MechanicsView data={analysis.mechanics} />}
-                          {activeCategory === 'reasoning' && <ReasoningView data={analysis.reasoning} />}
-                          {activeCategory === 'summary' && <SummaryView data={analysis.summary} />}
-                          {activeCategory === 'trajectory' && <TrajectoryView data={analysis.trajectory} />}
+                          {activeCategory === 'temporal' && <TemporalView data={analysis.temporal} frameImageUrls={analysis.metadata?.frame_image_urls} />}
+                          {activeCategory === 'spatial' && <SpatialView data={analysis.spatial} frameImageUrls={analysis.metadata?.frame_image_urls} />}
+                          {activeCategory === 'attribute' && <AttributeView data={analysis.attribute} frameImageUrls={analysis.metadata?.frame_image_urls} />}
+                          {activeCategory === 'mechanics' && <MechanicsView data={analysis.mechanics} frameImageUrls={analysis.metadata?.frame_image_urls} />}
+                          {activeCategory === 'reasoning' && <ReasoningView data={analysis.reasoning} frameImageUrls={analysis.metadata?.frame_image_urls} />}
+                          {activeCategory === 'summary' && <SummaryView data={analysis.summary} frameImageUrls={analysis.metadata?.frame_image_urls} />}
+                          {activeCategory === 'trajectory' && <TrajectoryView data={analysis.trajectory} frameImageUrls={analysis.metadata?.frame_image_urls} />}
                         </div>
                       </ScrollArea>
                     </CardContent>
@@ -1066,6 +1168,17 @@ export default function StructuredVQA() {
                 <div className="w-52 shrink-0 flex flex-col gap-3">
                   {analysis.confidence_scores && (
                     <ConfidenceDashboard scores={analysis.confidence_scores} />
+                  )}
+
+                  {/* Temporal Consistency Check */}
+                  {analysis.temporal_consistency && !analysis.temporal_consistency.consistent && (
+                    <TemporalConsistencyAlert conflicts={analysis.temporal_consistency.conflicts} />
+                  )}
+                  {analysis.temporal_consistency?.consistent && (
+                    <div className="flex items-center gap-1.5 text-xs text-green-600 p-2 rounded border border-green-200 bg-green-50 dark:bg-green-950 dark:border-green-800">
+                      <CheckCircle2 className="w-3.5 h-3.5" />
+                      <span>时间一致性校验通过</span>
+                    </div>
                   )}
 
                   {analysis.visual_evidence?.key_frames?.length > 0 && (
