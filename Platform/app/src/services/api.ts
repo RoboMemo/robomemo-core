@@ -307,6 +307,20 @@ class ApiService {
     });
   }
 
+  // ========== Frame Extraction API ==========
+
+  async extractFrames(videoPath: string, numFrames: number = 32): Promise<{
+    success: boolean;
+    cached: boolean;
+    framesDir: string;
+    frames: Array<{ index: number; filename: string; url: string }>;
+  }> {
+    return this.fetch('/frames/extract', {
+      method: 'POST',
+      body: JSON.stringify({ videoPath, numFrames }),
+    });
+  }
+
   // ========== Structured VQA API ==========
 
   async getVLMProviders(): Promise<VLMProvider[]> {
