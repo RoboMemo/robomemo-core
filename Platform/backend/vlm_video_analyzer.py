@@ -110,129 +110,206 @@ class VideoFrameExtractor:
 class VLMAnalyzer:
     """Base class for VLM-based video analysis"""
     
+    # ── Grounding helper doc injected into every prompt ──────────────────────
+    _GROUNDING_SCHEMA = """
+GROUNDING SCHEMA — required in every annotated item:
+Every claim must include a "grounding" object with:
+  - frame_indices: list of integer frame indices (from the sequence you were shown) that visually support this claim
+  - timestamps: matching human-readable timestamps e.g. ["0:02", "0:03.5"]
+  - bboxes: list of {"x": 0-1, "y": 0-1, "width": 0-1, "height": 0-1, "label": "string"} in normalised [0,1] coords (x/y = top-left corner). Include bounding boxes for every relevant object region. If unsure, omit or use approximate values.
+  - description: one sentence describing what the visual evidence shows
+  - confidence: float 0.0–1.0 reflecting how certain you are based on the visual evidence
+
+Example grounding object:
+{
+  "frame_indices": [24, 36, 48],
+  "timestamps": ["0:02", "0:03", "0:04"],
+  "bboxes": [{"x": 0.30, "y": 0.40, "width": 0.15, "height": 0.20, "label": "gripper"}],
+  "description": "Frames 24-48: gripper jaws visibly closing around cup edge",
+  "confidence": 0.91
+}
+"""
+
     VQA_PROMPT_TEMPLATE = """
-You are analyzing a robot manipulation video. Provide detailed, structured answers to the following 7 types of questions. Each answer must be grounded in specific visual evidence from the frames.
+You are an expert robot manipulation video analyst. Decompose the video into 7 structured VQA categories.
+EVERY annotated item MUST include a "grounding" field anchoring the claim to specific frames and bounding-box regions.
 
 VIDEO CONTEXT:
 - Total frames: {total_frames}
-- Duration: {duration:.2f} seconds
+- Duration: {duration:.2f} seconds  
 - FPS: {fps:.2f}
+- Frames are labelled with [Frame N/M @ timestamp] markers in the sequence you received.
 
-ANALYZE THE VIDEO AND PROVIDE STRUCTURED ANSWERS FOR EACH CATEGORY:
+""" + _GROUNDING_SCHEMA.strip() + """
 
-1. TEMPORAL (Time Relationships):
-   - Identify key actions in chronological order
-   - Specify which actions happen before/after others
-   - Provide exact timestamps for each action
-   - Example: "At 0:02, gripper opens BEFORE grasping object at 0:04"
+CATEGORIES TO ANALYSE:
 
-2. SPATIAL (Spatial Relationships):
-   - Describe positions of hands/grippers relative to objects
-   - Use precise spatial terms (left/right, above/below, near/far)
-   - Track how spatial relationships change over time
-   - Example: "Hand approaches from left side of cup at 45-degree angle"
+1. TEMPORAL — chronological action sequence, what happens before/after what
+2. SPATIAL — spatial relationships (left/right/above/below/near) between gripper, manipulated objects, and workspace
+3. ATTRIBUTE — object properties: color, material, shape, size, state changes
+4. MECHANICS — contact type, force level (light/medium/strong), contact points, force profile over time
+5. REASONING — why each action is performed this way; strategy and constraints
+6. SUMMARY — high-level task description, start state, end state, milestones, success/failure
+7. TRAJECTORY — end-effector motion: path type (linear/curved/rotational), velocity (slow/medium/fast), waypoints
 
-3. ATTRIBUTE (Object Properties):
-   - Identify all objects and their properties
-   - Describe colors, materials, shapes, sizes
-   - Note any changes in object states
-   - Example: "Red plastic cup, cylindrical, ~10cm tall, initially empty"
-
-4. MECHANICS (Force and Contact):
-   - Identify contact points between gripper/hand and objects
-   - Estimate force magnitude (light/medium/strong)
-   - Describe grip type and contact area
-   - Track force changes during manipulation
-   - Example: "Pinch grip with 2 fingers, light force at 0:03, increases to medium at 0:05"
-
-5. REASONING (Why This Way):
-   - Explain the purpose of each action
-   - Justify the approach and strategy
-   - Identify constraints being satisfied
-   - Example: "Approach from side to avoid blocking camera view and maintain stable grip"
-
-6. SUMMARY (Overall Task):
-   - Provide high-level description of complete task
-   - Identify start and end states
-   - List key milestones
-   - Example: "Task: Pick and place red cup from table to shelf. Success: Yes"
-
-7. TRAJECTORY (Motion Path):
-   - Describe end-effector/hand motion paths
-   - Specify movement types (linear, curved, rotational)
-   - Note velocity changes (slow/fast)
-   - Provide waypoints with timestamps
-   - Example: "Linear approach 0:00-0:02 (slow), curved grasp 0:02-0:04, linear lift 0:04-0:06 (fast)"
-
-IMPORTANT REQUIREMENTS:
-- Ground every claim in visible evidence from specific frames
-- Use exact timestamps (MM:SS format)
-- Be precise with measurements and directions
-- Ensure temporal consistency across all answers
-- Identify uncertainties explicitly
-
-Provide your analysis in JSON format with this structure:
+OUTPUT FORMAT — return ONLY valid JSON (no markdown):
 {{
   "temporal": {{
     "action_sequence": [
-      {{"action": "action_name", "timestamp": "MM:SS", "frame_range": [start, end], "description": "detailed description"}}
+      {{
+        "action": "Approach cup",
+        "timestamp": "0:02",
+        "frame_range": [12, 36],
+        "description": "End-effector moves toward cup from upper right",
+        "grounding": {{
+          "frame_indices": [12, 24, 36],
+          "timestamps": ["0:02", "0:03", "0:04"],
+          "bboxes": [{{"x": 0.55, "y": 0.30, "width": 0.12, "height": 0.18, "label": "end-effector"}}],
+          "description": "Frames 12-36 show arm approaching left side of frame where cup sits",
+          "confidence": 0.93
+        }}
+      }}
     ],
-    "relationships": ["action1 BEFORE action2", ...]
+    "relationships": ["Approach BEFORE Pre-grasp", "Pre-grasp BEFORE Grasp"]
   }},
   "spatial": {{
     "key_relationships": [
-      {{"timestamp": "MM:SS", "relationship": "object1 position relative to object2", "details": "precise spatial description"}}
+      {{
+        "timestamp": "0:03",
+        "relationship": "Gripper is directly above cup",
+        "details": "End-effector centroid is within 2 cm of cup opening center",
+        "grounding": {{
+          "frame_indices": [36, 42],
+          "timestamps": ["0:04", "0:04.5"],
+          "bboxes": [
+            {{"x": 0.38, "y": 0.28, "width": 0.10, "height": 0.08, "label": "gripper"}},
+            {{"x": 0.40, "y": 0.46, "width": 0.08, "height": 0.12, "label": "cup"}}
+          ],
+          "description": "Overhead view shows gripper aligned with cup top opening",
+          "confidence": 0.90
+        }}
+      }}
     ],
-    "trajectory_spatial": "overall spatial strategy"
+    "trajectory_spatial": "Arm operates in 40x30 cm workspace. Cup transported left-to-right."
   }},
   "attribute": {{
     "objects": [
-      {{"name": "object_name", "properties": {{"color": "", "material": "", "shape": "", "size": ""}}, "state_changes": []}}
+      {{
+        "name": "Red plastic cup",
+        "properties": {{"color": "red", "material": "plastic", "shape": "cylindrical", "size": "~9cm tall"}},
+        "state_changes": ["Stationary → Grasped at t=0:03", "Grasped → Placed at t=0:07"],
+        "grounding": {{
+          "frame_indices": [0, 60, 180],
+          "timestamps": ["0:00", "0:03", "0:07"],
+          "bboxes": [{{"x": 0.30, "y": 0.46, "width": 0.09, "height": 0.14, "label": "cup"}}],
+          "description": "Cup visible throughout. Color and shape consistent. Deformation at contact visible in frames 60-80.",
+          "confidence": 0.96
+        }}
+      }}
     ]
   }},
   "mechanics": {{
     "contacts": [
-      {{"timestamp": "MM:SS", "contact_type": "grip_type", "force_level": "light/medium/strong", "contact_points": "description", "area": "description"}}
+      {{
+        "timestamp": "0:03",
+        "contact_type": "Parallel-jaw pinch grip",
+        "force_level": "medium",
+        "contact_points": "Both fingers contact cup outer wall at mid-height",
+        "area": "Two ~2x1 cm patches on opposite sides",
+        "grounding": {{
+          "frame_indices": [60, 72, 84],
+          "timestamps": ["0:03", "0:03.5", "0:04"],
+          "bboxes": [
+            {{"x": 0.36, "y": 0.44, "width": 0.05, "height": 0.08, "label": "contact-left"}},
+            {{"x": 0.52, "y": 0.44, "width": 0.05, "height": 0.08, "label": "contact-right"}}
+          ],
+          "description": "Frames 60-84: slight cup wall deformation visible at gripper finger contact",
+          "confidence": 0.88
+        }}
+      }}
     ],
-    "force_profile": "how force changes over time"
+    "force_profile": "0N at approach, increases to ~5N at grasp, maintained through transport, 0N at release"
   }},
   "reasoning": {{
     "action_justifications": [
-      {{"action": "action_name", "reason": "why this approach", "constraints": ["constraint1", ...]}}
+      {{
+        "action": "Approach from above at 45 degrees",
+        "reason": "Top-down approach avoids arm self-occlusion and keeps camera view clear",
+        "constraints": ["No collision with table edge", "Camera line-of-sight to cup"],
+        "grounding": {{
+          "frame_indices": [0, 24],
+          "timestamps": ["0:00", "0:02"],
+          "bboxes": [],
+          "description": "Arm trajectory visible approaching from upper-right diagonal",
+          "confidence": 0.85
+        }}
+      }}
     ],
-    "overall_strategy": "high-level reasoning"
+    "overall_strategy": "Conservative pick-and-place: minimise spill risk with slow speed and sufficient lift height"
   }},
   "summary": {{
-    "task_description": "what task is being performed",
-    "start_state": "initial configuration",
-    "end_state": "final configuration",
-    "success": true/false,
-    "key_milestones": ["milestone1", ...],
-    "duration": "total time"
+    "task_description": "Pick up red cup from left zone and place in right target zone",
+    "start_state": "Cup upright on left table zone. Gripper at rest.",
+    "end_state": "Cup in target zone. Gripper open and returned.",
+    "success": true,
+    "key_milestones": ["Grasp at 0:03", "Lift at 0:04", "Place at 0:07"],
+    "duration": "{duration:.1f} seconds",
+    "grounding_start": {{
+      "frame_indices": [0, 6],
+      "timestamps": ["0:00", "0:00.2"],
+      "bboxes": [{{"x": 0.28, "y": 0.46, "width": 0.09, "height": 0.14, "label": "cup-start"}}],
+      "description": "Frame 0: initial state with cup on left, gripper at rest upper right",
+      "confidence": 0.98
+    }},
+    "grounding_end": {{
+      "frame_indices": [175, 180],
+      "timestamps": ["0:07.8", "0:08"],
+      "bboxes": [{{"x": 0.65, "y": 0.46, "width": 0.09, "height": 0.14, "label": "cup-end"}}],
+      "description": "Final frames: cup stable in target zone, gripper open",
+      "confidence": 0.97
+    }}
   }},
   "trajectory": {{
     "motion_segments": [
-      {{"segment": "segment_name", "time_range": "start-end", "motion_type": "linear/curved/rotational", "velocity": "slow/medium/fast", "waypoints": []}}
+      {{
+        "segment": "Approach arc",
+        "time_range": "0:00-0:02",
+        "motion_type": "curved",
+        "velocity": "medium",
+        "waypoints": ["Rest position", "Mid-arc above workspace", "Above cup"],
+        "grounding": {{
+          "frame_indices": [0, 18, 36],
+          "timestamps": ["0:00", "0:01", "0:02"],
+          "bboxes": [{{"x": 0.40, "y": 0.20, "width": 0.35, "height": 0.30, "label": "approach-arc"}}],
+          "description": "Curved arm path from top-right to center-left visible across frames 0-36",
+          "confidence": 0.91
+        }}
+      }}
     ],
-    "overall_path": "description of complete trajectory"
+    "overall_path": "J-shaped: arc approach → vertical descent → vertical lift → horizontal traverse → vertical descent to place"
   }},
   "visual_evidence": {{
     "key_frames": [
-      {{"frame_idx": 0, "timestamp": "MM:SS", "significance": "why this frame is important"}}
+      {{"frame_idx": 0,  "timestamp": "0:00", "significance": "Initial state"}},
+      {{"frame_idx": 36, "timestamp": "0:02", "significance": "Gripper aligned above cup"}},
+      {{"frame_idx": 60, "timestamp": "0:03", "significance": "Grasp established"}},
+      {{"frame_idx": 84, "timestamp": "0:04", "significance": "Cup lifted clear of table"}}
     ]
   }},
   "confidence_scores": {{
-    "temporal": 0.0-1.0,
-    "spatial": 0.0-1.0,
-    "attribute": 0.0-1.0,
-    "mechanics": 0.0-1.0,
-    "reasoning": 0.0-1.0,
-    "summary": 0.0-1.0,
-    "trajectory": 0.0-1.0
+    "temporal":   0.0,
+    "spatial":    0.0,
+    "attribute":  0.0,
+    "mechanics":  0.0,
+    "reasoning":  0.0,
+    "summary":    0.0,
+    "trajectory": 0.0
   }}
 }}
 
-Return ONLY the JSON, no additional text.
+Replace all example values with your actual observations from the video frames provided.
+Confidence scores should be your genuine assessment (0.0–1.0) for each category.
+Return ONLY the JSON object. No markdown. No explanation outside the JSON.
 """
 
     def __init__(self, api_key: str, model_name: str = "auto"):

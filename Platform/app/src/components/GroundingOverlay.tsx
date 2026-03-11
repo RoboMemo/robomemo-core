@@ -134,7 +134,7 @@ interface GroundingBadgeProps {
 
 export function GroundingBadge({
   grounding,
-  frameImageUrls,
+  frameImageUrls: _frameImageUrls,
   colorClass = 'text-blue-500',
   compact = false,
   onClickView,
@@ -187,8 +187,8 @@ interface GroundingDetailProps {
 
 export function GroundingDetail({
   grounding,
-  frameImageUrls = [],
-  onClose,
+  frameImageUrls: _frameImageUrls = [],
+  onClose: _onClose,
 }: GroundingDetailProps) {
   if (!grounding) return null;
 
@@ -217,7 +217,7 @@ export function GroundingDetail({
       {grounding.frame_indices?.length > 0 && (
         <div className="flex gap-2 overflow-x-auto pb-1">
           {grounding.frame_indices.map((frameIdx, i) => {
-            const url = frameImageUrls?.[frameIdx];
+            const url = _frameImageUrls?.[frameIdx];
             // Distribute bboxes across frames or show all on each
             const frameBboxes = grounding.bboxes ?? [];
 

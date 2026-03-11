@@ -2,26 +2,138 @@ import type {
   Dataset, Episode, Annotation, Collection, 
   Simulator, SensorConfig, AugmentationModel, ExportFormat,
   PlatformStats, TimelineEntry,
-  StructuredVQAAnalysis, VQAAnnotationRecord, VLMProvider
+  StructuredVQAAnalysis, VQAAnnotationRecord, VLMProvider,
+  TemporalConsistencyCheck
 } from '@/types';
 
 const API_BASE = 'http://localhost:3001/api';
 
 class ApiService {
+  private token: string | null = null;
+
+  setToken(token: string | null) {
+    this.token = token;
+    if (token) {
+      localStorage.setItem('robomemo_token', token);
+    } else {
+      localStorage.removeItem('robomemo_token');
+    }
+  }
+
+  getToken(): string | null {
+    if (!this.token) {
+      this.token = localStorage.getItem('robomemo_token');
+    }
+    return this.token;
+  }
+
   private async fetch<T>(endpoint: string, options?: RequestInit): Promise<T> {
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+
+    const token = this.getToken();
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
     const response = await fetch(`${API_BASE}${endpoint}`, {
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      headers,
       ...options,
     });
     
     if (!response.ok) {
       const error = await response.json().catch(() => ({ error: 'Unknown error' }));
+      if (response.status === 401) {
+        this.setToken(null);
+      }
       throw new Error(error.error || `HTTP ${response.status}`);
     }
     
     return response.json();
+  }
+
+  // ========== Authentication ==========
+
+  async login(email: string, password: string): Promise<{ token: string; user: any }> {
+    const result = await this.fetch<{ token: string; user: any }>('/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ email, password }),
+    });
+    this.setToken(result.token);
+    return result;
+  }
+
+  async register(email: string, password: string, name: string): Promise<{ token: string; user: any }> {
+    const result = await this.fetch<{ token: string; user: any }>('/auth/register', {
+      method: 'POST',
+      body: JSON.stringify({ email, password, name }),
+    });
+    this.setToken(result.token);
+    return result;
+  }
+
+  async getMe(): Promise<any> {
+    return this.fetch('/auth/me');
+  }
+
+  logout() {
+    this.setToken(null);
+  }
+
+  // ========== User Management ==========
+
+  async getUsers(): Promise<any[]> {
+    return this.fetch('/users');
+  }
+
+  async updateUser(id: string, updates: any): Promise<any> {
+    return this.fetch(`/users/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(updates),
+    });
+  }
+
+  async deleteUser(id: string): Promise<void> {
+    return this.fetch(`/users/${id}`, { method: 'DELETE' });
+  }
+
+  // ========== GDPR Compliance ==========
+
+  async gdprAccessRequest(subjectId: string): Promise<any> {
+    return this.fetch(`/gdpr/access/${subjectId}`);
+  }
+
+  async gdprErasure(subjectId: string): Promise<any> {
+    return this.fetch(`/gdpr/erasure/${subjectId}`, { method: 'DELETE' });
+  }
+
+  async gdprPortability(subjectId: string): Promise<any> {
+    return this.fetch(`/gdpr/portability/${subjectId}`);
+  }
+
+  // ========== Audit Logs ==========
+
+  async getAuditLogs(filters?: { startDate?: string; endDate?: string; event?: string; limit?: number }): Promise<any[]> {
+    const params = new URLSearchParams();
+    if (filters?.startDate) params.set('startDate', filters.startDate);
+    if (filters?.endDate) params.set('endDate', filters.endDate);
+    if (filters?.event) params.set('event', filters.event);
+    if (filters?.limit) params.set('limit', String(filters.limit));
+    return this.fetch(`/audit/logs?${params.toString()}`);
+  }
+
+  async getAuditStats(): Promise<any> {
+    return this.fetch('/audit/stats');
+  }
+
+  // ========== Temporal Consistency ==========
+
+  async validateConsistency(analysis: StructuredVQAAnalysis): Promise<TemporalConsistencyCheck> {
+    return this.fetch('/vlm/validate-consistency', {
+      method: 'POST',
+      body: JSON.stringify({ analysis }),
+    });
   }
 
   // Datasets
@@ -321,6 +433,54 @@ class ApiService {
     });
   }
 
+  // ========== Video Upload API ==========
+
+  /**
+   * Upload a local video file to the server and get back the server-side path.
+   * Uses multipart/form-data — NOT json fetch wrapper.
+   */
+  async uploadVideo(file: File, onProgress?: (pct: number) => void): Promise<{
+    success: boolean;
+    filename: string;
+    originalName: string;
+    serverPath: string;
+    size: number;
+    url: string;
+  }> {
+    return new Promise((resolve, reject) => {
+      const formData = new FormData();
+      formData.append('video', file);
+
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', `${API_BASE}/upload/video`);
+
+      const token = this.getToken();
+      if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+
+      if (onProgress) {
+        xhr.upload.addEventListener('progress', (e) => {
+          if (e.lengthComputable) onProgress(Math.round((e.loaded / e.total) * 100));
+        });
+      }
+
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          try { resolve(JSON.parse(xhr.responseText)); }
+          catch { reject(new Error('Invalid server response')); }
+        } else {
+          try {
+            const err = JSON.parse(xhr.responseText);
+            reject(new Error(err.error || `Upload failed: HTTP ${xhr.status}`));
+          } catch {
+            reject(new Error(`Upload failed: HTTP ${xhr.status}`));
+          }
+        }
+      };
+      xhr.onerror = () => reject(new Error('Network error during upload'));
+      xhr.send(formData);
+    });
+  }
+
   // ========== Structured VQA API ==========
 
   async getVLMProviders(): Promise<VLMProvider[]> {
@@ -346,6 +506,35 @@ class ApiService {
       method: 'POST',
       body: JSON.stringify(params),
     });
+  }
+
+  async runDemoAnalysis(taskName?: string): Promise<{ success: boolean; annotationId: string; analysis: StructuredVQAAnalysis }> {
+    return this.fetch('/vlm/demo-analysis', {
+      method: 'POST',
+      body: JSON.stringify({ taskName }),
+    });
+  }
+
+  async getComplianceStatus(): Promise<any> {
+    return this.fetch('/compliance/status');
+  }
+
+  async recordLineage(entry: {
+    resourceId: string;
+    resourceType: string;
+    operation: string;
+    sourceRegion?: string;
+    vlmProvider?: string;
+    details?: Record<string, any>;
+  }): Promise<{ success: boolean; lineageId: string }> {
+    return this.fetch('/lineage/record', {
+      method: 'POST',
+      body: JSON.stringify(entry),
+    });
+  }
+
+  async traceLineage(resourceId: string): Promise<any[]> {
+    return this.fetch(`/lineage/trace/${resourceId}`);
   }
 
   async getStructuredAnalyses(): Promise<VQAAnnotationRecord[]> {
