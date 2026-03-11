@@ -1,0 +1,59 @@
+# ============================================================
+# RoboMemo Platform — Docker Compose (Singapore / UAE Deploy)
+# ============================================================
+# Usage:
+#   docker compose up -d            # start all services
+#   docker compose logs -f app      # follow app logs
+#   docker compose down              # stop
+# ============================================================
+
+services:
+  # ─── NGINX Reverse Proxy + GeoIP WAF ────────────────────────
+  nginx:
+    image: nginx:1.25-alpine
+    ports:
+      - "443:443"
+      - "80:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./nginx/ssl:/etc/ssl/robomemo:ro
+      - ./nginx/GeoIP:/etc/nginx/GeoIP:ro
+    depends_on:
+      app:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - robomemo-net
+
+  # ─── App Server (Node.js + Python VLM) ─────────────────────
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file: backend/.env
+    environment:
+      - NODE_ENV=production
+      - PORT=3001
+    volumes:
+      - app-data:/app/data
+      - app-uploads:/app/uploads
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3001/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - robomemo-net
+
+volumes:
+  app-data:
+    driver: local
+  app-uploads:
+    driver: local
+
+networks:
+  robomemo-net:
+    driver: bridge

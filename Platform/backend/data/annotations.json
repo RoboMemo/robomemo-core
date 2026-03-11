@@ -1,0 +1,73 @@
+[
+  {
+    "id": "ann_auto_1772801087824_ep_1",
+    "episodeId": "ep_1",
+    "type": "label",
+    "label": "Auto-detected action sequence",
+    "confidence": 0.85,
+    "annotator": "VLM-Auto",
+    "verified": false,
+    "createdAt": "2026-03-06T12:44:47.824Z",
+    "updatedAt": "2026-03-06T12:44:47.824Z"
+  },
+  {
+    "id": "ann_gr_seed_ep_Folding_Clothes_and_Zipper_Operations_fold_and_store_clothes_0000",
+    "episodeId": "ep_Folding_Clothes_and_Zipper_Operations_fold_and_store_clothes_0000",
+    "datasetId": "genrobot_10kh",
+    "type": "label",
+    "label": "fold_and_store_clothes",
+    "confidence": 1.0,
+    "annotator": "metadata",
+    "verified": true,
+    "createdAt": "2026-03-07T14:30:04.196411",
+    "updatedAt": "2026-03-07T14:30:04.196411"
+  },
+  {
+    "id": "ann_gr_seed_ep_Folding_Clothes_and_Zipper_Operations_fold_and_store_clothes_0001",
+    "episodeId": "ep_Folding_Clothes_and_Zipper_Operations_fold_and_store_clothes_0001",
+    "datasetId": "genrobot_10kh",
+    "type": "label",
+    "label": "fold_and_store_clothes",
+    "confidence": 1.0,
+    "annotator": "metadata",
+    "verified": true,
+    "createdAt": "2026-03-07T14:30:04.196411",
+    "updatedAt": "2026-03-07T14:30:04.196411"
+  },
+  {
+    "id": "ann_gr_seed_ep_Folding_Clothes_and_Zipper_Operations_zip_clothes_0000",
+    "episodeId": "ep_Folding_Clothes_and_Zipper_Operations_zip_clothes_0000",
+    "datasetId": "genrobot_10kh",
+    "type": "label",
+    "label": "zip_clothes",
+    "confidence": 1.0,
+    "annotator": "metadata",
+    "verified": true,
+    "createdAt": "2026-03-07T14:30:04.196411",
+    "updatedAt": "2026-03-07T14:30:04.196411"
+  },
+  {
+    "id": "ann_gr_seed_ep_Folding_Clothes_and_Zipper_Operations_zip_clothes_0001",
+    "episodeId": "ep_Folding_Clothes_and_Zipper_Operations_zip_clothes_0001",
+    "datasetId": "genrobot_10kh",
+    "type": "label",
+    "label": "zip_clothes",
+    "confidence": 1.0,
+    "annotator": "metadata",
+    "verified": true,
+    "createdAt": "2026-03-07T14:30:04.196411",
+    "updatedAt": "2026-03-07T14:30:04.196411"
+  },
+  {
+    "id": "ann_gr_seed_ep_Cooking_and_Kitchen_Clean_clean_container_0000",
+    "episodeId": "ep_Cooking_and_Kitchen_Clean_clean_container_0000",
+    "datasetId": "genrobot_10kh",
+    "type": "label",
+    "label": "clean_container",
+    "confidence": 1.0,
+    "annotator": "metadata",
+    "verified": true,
+    "createdAt": "2026-03-07T14:30:04.196411",
+    "updatedAt": "2026-03-07T14:30:04.196411"
+  }
+]

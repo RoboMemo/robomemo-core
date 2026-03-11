@@ -1,0 +1,108 @@
+[
+  {
+    "id": "dataset_1",
+    "name": "RoboGrasp Demo",
+    "description": "Demo dataset of robot grasping red cube",
+    "format": "lerobot",
+    "robotType": "Franka Panda",
+    "sensorConfig": {
+      "name": "Standard RGB-D",
+      "sensors": [
+        {
+          "type": "rgbd",
+          "name": "Wrist Camera",
+          "location": "wrist"
+        },
+        {
+          "type": "rgbd",
+          "name": "Head Camera",
+          "location": "head"
+        }
+      ]
+    },
+    "createdAt": "2026-03-01T12:00:00Z",
+    "updatedAt": "2026-03-01T12:00:00Z",
+    "episodeCount": 1,
+    "frameCount": 1000,
+    "size": 5000000,
+    "version": "1.0.0",
+    "license": "MIT"
+  },
+  {
+    "id": "genrobot_10kh",
+    "name": "10Kh-RealOmin-OpenData",
+    "description": "Largest open embodied intelligence dataset. 10,000+ hours of real household robot manipulation. Synthetic preview \u2014 real data requires a HuggingFace token.",
+    "format": "lerobot",
+    "robotType": "GenDAS Gripper",
+    "source": "genrobot2025/10Kh-RealOmin-OpenData",
+    "taskDescription": "Household robot manipulation: folding, cooking, cleaning, organizing",
+    "environment": {
+      "type": "household",
+      "stages": [
+        "Stage1",
+        "Stage2"
+      ]
+    },
+    "createdAt": "2026-03-07T14:30:04.196411",
+    "updatedAt": "2026-03-07T14:30:04.196411",
+    "episodeCount": 30,
+    "frameCount": 5024,
+    "size": 48,
+    "version": "1.0.0",
+    "license": "CC-BY-SA-4.0",
+    "sensorConfig": {
+      "name": "DAS Gripper Sensor Suite",
+      "sensors": [
+        {
+          "type": "camera",
+          "name": "mid_fisheye",
+          "location": "gripper_center"
+        },
+        {
+          "type": "imu",
+          "name": "imu_6axis",
+          "location": "gripper_body"
+        },
+        {
+          "type": "tactile",
+          "name": "tactile_left",
+          "location": "finger_left"
+        },
+        {
+          "type": "tactile",
+          "name": "tactile_right",
+          "location": "finger_right"
+        },
+        {
+          "type": "encoder",
+          "name": "magnetic_enc",
+          "location": "gripper_joint"
+        }
+      ]
+    },
+    "skills": [
+      "fold_and_store_clothes",
+      "zip_clothes",
+      "clean_container",
+      "unscrew_bottle_cap_and_pour",
+      "clean_bowl",
+      "fold_and_store_shopping_bag",
+      "fold_towel",
+      "desktop_object_sorting",
+      "drawer_to_take_items",
+      "lace_up_shoes_with_both_hands",
+      "organize_scattered_shoes",
+      "irregular_object_clutter",
+      "flexible_grasping_and_sorting",
+      "carton_sorting_clutter",
+      "small_object_storage"
+    ],
+    "syntheticPreview": true,
+    "realDataStats": {
+      "skills": 12,
+      "hours": 950,
+      "clips": 39761,
+      "size_tb": 3.45
+    }
+  }
+]
