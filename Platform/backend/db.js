@@ -375,4 +375,204 @@ function getStats() {
   };
 }
 
-module.exports = { db, Datasets, Episodes, Annotations, syncFromJSON, getStats };
+// ─── Data Lineage ──────────────────────────────────────────────────────────────
+// ISO 27001 Annex A.8.2 / SOC 2 CC6.1: track every data-touching operation
+db.exec(`
+  CREATE TABLE IF NOT EXISTS data_lineage (
+    id              TEXT PRIMARY KEY,
+    timestamp       TEXT NOT NULL,
+    resource_id     TEXT NOT NULL,
+    resource_type   TEXT NOT NULL,   -- 'video' | 'annotation' | 'dataset' | 'export'
+    operation       TEXT NOT NULL,   -- 'upload' | 'annotate' | 'review' | 'export' | 'delete'
+    source_region   TEXT,            -- ISO country / AWS region of origin
+    annotator_id    TEXT,
+    vlm_provider    TEXT,            -- 'gemini' | 'claude' | 'openai' | 'local' | null
+    upload_ip       TEXT,
+    processing_node TEXT,            -- hostname of backend that processed this
+    details         TEXT             -- JSON: any extra lineage metadata
+  );
+  CREATE INDEX IF NOT EXISTS idx_lineage_resource ON data_lineage(resource_id);
+  CREATE INDEX IF NOT EXISTS idx_lineage_ts       ON data_lineage(timestamp);
+  CREATE INDEX IF NOT EXISTS idx_lineage_op       ON data_lineage(operation);
+`);
+
+const crypto_lin = require('crypto');
+const Lineage = {
+  record: (entry) => {
+    const id = `lin_${Date.now()}_${crypto_lin.randomBytes(4).toString('hex')}`;
+    const now = new Date().toISOString();
+    db.prepare(`
+      INSERT INTO data_lineage
+        (id, timestamp, resource_id, resource_type, operation,
+         source_region, annotator_id, vlm_provider, upload_ip, processing_node, details)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?)`
+    ).run(
+      id, now,
+      entry.resourceId, entry.resourceType, entry.operation,
+      entry.sourceRegion || null,
+      entry.annotatorId || null,
+      entry.vlmProvider || null,
+      entry.uploadIp || null,
+      entry.processingNode || null,
+      entry.details ? JSON.stringify(entry.details) : null,
+    );
+    return { id, timestamp: now, ...entry };
+  },
+
+  trace: (resourceId) => {
+    const rows = db.prepare(
+      'SELECT * FROM data_lineage WHERE resource_id = ? ORDER BY timestamp ASC'
+    ).all(resourceId);
+    return rows.map(r => ({
+      ...r,
+      details: r.details ? JSON.parse(r.details) : null,
+    }));
+  },
+
+  getRecent: (limit = 50) => {
+    return db.prepare(
+      'SELECT * FROM data_lineage ORDER BY timestamp DESC LIMIT ?'
+    ).all(limit).map(r => ({ ...r, details: r.details ? JSON.parse(r.details) : null }));
+  },
+};
+
+// ─── Collections ──────────────────────────────────────────────────────────────
+db.exec(`
+  CREATE TABLE IF NOT EXISTS collections (
+    id          TEXT PRIMARY KEY,
+    name        TEXT NOT NULL,
+    description TEXT,
+    dataset_id  TEXT,
+    episode_ids TEXT,   -- JSON array
+    created_at  TEXT,
+    updated_at  TEXT
+  );
+`);
+
+const Collections = {
+  getAll: () =>
+    db.prepare('SELECT * FROM collections ORDER BY created_at DESC').all().map(r => {
+      const out = parseRow(r);
+      if (out.episode_ids && typeof out.episode_ids === 'string') {
+        try { out.episodeIds = JSON.parse(out.episode_ids); } catch { out.episodeIds = []; }
+      }
+      delete out.episode_ids;
+      return out;
+    }),
+
+  getById: (id) => {
+    const r = db.prepare('SELECT * FROM collections WHERE id = ?').get(id);
+    if (!r) return null;
+    const out = parseRow(r);
+    if (out.episode_ids && typeof out.episode_ids === 'string') {
+      try { out.episodeIds = JSON.parse(out.episode_ids); } catch { out.episodeIds = []; }
+    }
+    delete out.episode_ids;
+    return out;
+  },
+
+  insert: (c) => {
+    db.prepare(`
+      INSERT OR REPLACE INTO collections
+        (id, name, description, dataset_id, episode_ids, created_at, updated_at)
+      VALUES (?,?,?,?,?,?,?)`
+    ).run(c.id, c.name, c.description || null, c.datasetId || null,
+      JSON.stringify(c.episodeIds || []), c.createdAt, c.updatedAt);
+    return Collections.getById(c.id);
+  },
+
+  addEpisode: (collectionId, episodeId) => {
+    const col = Collections.getById(collectionId);
+    if (!col) return null;
+    const ids = col.episodeIds || [];
+    if (!ids.includes(episodeId)) ids.push(episodeId);
+    db.prepare('UPDATE collections SET episode_ids = ?, updated_at = ? WHERE id = ?')
+      .run(JSON.stringify(ids), new Date().toISOString(), collectionId);
+    return Collections.getById(collectionId);
+  },
+};
+
+// ─── Extended Dataset CRUD ────────────────────────────────────────────────────
+Datasets.update = (id, updates) => {
+  const existing = Datasets.getById(id);
+  if (!existing) return null;
+  const merged = { ...existing, ...updates, updatedAt: new Date().toISOString() };
+  return Datasets.insert(merged);
+};
+
+Datasets.delete = (id) => {
+  db.prepare('DELETE FROM datasets WHERE id = ?').run(id);
+  db.prepare('DELETE FROM episodes WHERE dataset_id = ?').run(id);
+  db.prepare('DELETE FROM annotations WHERE dataset_id = ?').run(id);
+};
+
+// ─── Extended Annotation CRUD ─────────────────────────────────────────────────
+Annotations.update = (id, updates) => {
+  const existing = Annotations.getById(id);
+  if (!existing) return null;
+  const merged = { ...existing, ...updates, updatedAt: new Date().toISOString() };
+  return Annotations.insert(merged);
+};
+
+Annotations.delete = (id) => {
+  db.prepare('DELETE FROM annotations WHERE id = ?').run(id);
+};
+
+Annotations.getByFrame = (frameId) => {
+  // frameId is stored in the data JSON blob or as a label convention
+  return db.prepare("SELECT * FROM annotations WHERE data LIKE ? OR label LIKE ? ORDER BY created_at DESC")
+    .all(`%${frameId}%`, `%${frameId}%`).map(parseRow);
+};
+
+// ─── Extended Stats ───────────────────────────────────────────────────────────
+function getFullStats() {
+  const base = getStats();
+  const totalSize = db.prepare('SELECT COALESCE(SUM(size),0) as s FROM datasets').get().s;
+  const totalDuration = db.prepare('SELECT COALESCE(SUM(duration),0) as d FROM episodes').get().d;
+  const formats = db.prepare('SELECT format, COUNT(*) as count FROM datasets GROUP BY format').all();
+  const robotTypes = db.prepare('SELECT robot_type, COUNT(*) as count FROM datasets GROUP BY robot_type').all();
+  return {
+    ...base,
+    totalSize,
+    totalDuration,
+    formats: formats.map(f => ({ format: f.format, count: f.count })),
+    robotTypes: robotTypes.map(r => ({ robotType: r.robot_type, count: r.count })),
+    collections: db.prepare('SELECT COUNT(*) as n FROM collections').get().n,
+  };
+}
+
+function getDatasetStats() {
+  return {
+    total: db.prepare('SELECT COUNT(*) as n FROM datasets').get().n,
+    totalEpisodes: db.prepare('SELECT COUNT(*) as n FROM episodes').get().n,
+    totalSize: db.prepare('SELECT COALESCE(SUM(size),0) as s FROM datasets').get().s,
+    byFormat: db.prepare('SELECT format, COUNT(*) as count FROM datasets GROUP BY format').all(),
+    byRobot: db.prepare('SELECT robot_type as robotType, COUNT(*) as count FROM datasets GROUP BY robot_type').all(),
+    recentDatasets: Datasets.getAll().slice(0, 5),
+  };
+}
+
+function getAnnotationStats() {
+  return {
+    total: db.prepare('SELECT COUNT(*) as n FROM annotations').get().n,
+    byType: db.prepare('SELECT type, COUNT(*) as count FROM annotations GROUP BY type').all(),
+    verified: db.prepare('SELECT COUNT(*) as n FROM annotations WHERE verified = 1').get().n,
+    unverified: db.prepare('SELECT COUNT(*) as n FROM annotations WHERE verified = 0').get().n,
+    byAnnotator: db.prepare('SELECT annotator, COUNT(*) as count FROM annotations GROUP BY annotator').all(),
+    vqaCount: db.prepare("SELECT COUNT(*) as n FROM annotations WHERE type = 'structured_vqa'").get().n,
+  };
+}
+
+function getTimeline(days = 30) {
+  const since = new Date(Date.now() - days * 86400000).toISOString();
+  return {
+    datasets: db.prepare('SELECT DATE(created_at) as date, COUNT(*) as count FROM datasets WHERE created_at >= ? GROUP BY DATE(created_at) ORDER BY date').all(since),
+    episodes: db.prepare('SELECT DATE(created_at) as date, COUNT(*) as count FROM episodes WHERE created_at >= ? GROUP BY DATE(created_at) ORDER BY date').all(since),
+    annotations: db.prepare('SELECT DATE(created_at) as date, COUNT(*) as count FROM annotations WHERE created_at >= ? GROUP BY DATE(created_at) ORDER BY date').all(since),
+  };
+}
+
+module.exports = {
+  db, Datasets, Episodes, Annotations, Collections, Lineage,
+  syncFromJSON, getStats, getFullStats, getDatasetStats, getAnnotationStats, getTimeline
+};

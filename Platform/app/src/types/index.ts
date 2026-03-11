@@ -1,3 +1,47 @@
+// ========== Auth & RBAC Types ==========
+
+export type UserRole = 'annotator' | 'reviewer' | 'data_admin' | 'platform_admin' | 'auditor';
+
+export interface User {
+  id: string;
+  email: string;
+  name: string;
+  role: UserRole;
+  region: string;
+  active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AuthResponse {
+  token: string;
+  user: User;
+}
+
+// ========== Audit Log Types ==========
+
+export interface AuditEvent {
+  id: string;
+  timestamp: string;
+  event: string;
+  user_id?: string;
+  role?: string;
+  ip?: string;
+  country?: string;
+  resource?: string;
+  action: string;
+  details?: Record<string, any>;
+  result: 'success' | 'denied' | 'error';
+}
+
+export interface AuditStats {
+  total: number;
+  denied: number;
+  errors: number;
+  geoBlocks: number;
+  last24h: number;
+}
+
 export interface Dataset {
   id: string;
   name: string;

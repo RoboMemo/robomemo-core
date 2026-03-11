@@ -59,7 +59,7 @@ export function Navigation({ currentPage, onPageChange }: NavigationProps) {
             onClick={() => handlePageChange('home')}
             className="flex items-center space-x-2"
           >
-            <span className="text-xl font-bold text-white">RoboMemo</span>
+            <img src="/images/robomemo-logo.png" alt="RoboMemo" className="h-8 w-auto" />
           </button>
 
           {/* Desktop Navigation */}

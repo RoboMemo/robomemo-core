@@ -1,0 +1,13 @@
+# ============================================================
+# RoboMemo — Terraform Variables (Singapore Production)
+# ============================================================
+
+aws_region     = "ap-southeast-1"
+environment    = "production"
+app_name       = "robomemo"
+domain_name    = "platform.robomemo.io"
+
+# Sensitive values — set via environment or terraform.tfvars (DO NOT commit)
+# db_password    = "..."
+# jwt_secret     = "..."
+# encryption_key = "..."

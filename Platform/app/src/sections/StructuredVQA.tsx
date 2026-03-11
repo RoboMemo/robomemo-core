@@ -22,6 +22,7 @@ import {
   Info,
   Layers,
   Cpu,
+  Sparkles,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -632,6 +633,9 @@ export default function StructuredVQA() {
   const [videoPath, setVideoPath] = useState('');
   const [videoFile, setVideoFile] = useState<File | null>(null);
   const [videoUrl, setVideoUrl] = useState<string>('');
+  const [uploadedServerPath, setUploadedServerPath] = useState<string>('');
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [isUploading, setIsUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Analysis state
@@ -681,15 +685,27 @@ export default function StructuredVQA() {
 
   const currentProvider = providers.find((p) => p.id === selectedProvider);
 
-  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
     setVideoFile(file);
-    setVideoPath(file.name); // display name
+    setVideoPath(file.name);
     const url = URL.createObjectURL(file);
     setVideoUrl(url);
     setAnalysis(null);
     setError(null);
+    setUploadedServerPath('');
+    setUploadProgress(0);
+    setIsUploading(true);
+    try {
+      const result = await api.uploadVideo(file, setUploadProgress);
+      setUploadedServerPath(result.serverPath);
+    } catch (err: any) {
+      setError(`Upload failed: ${err.message}. Using local path fallback.`);
+    } finally {
+      setIsUploading(false);
+      setUploadProgress(0);
+    }
   };
 
   const saveApiKey = () => {
@@ -731,7 +747,7 @@ export default function StructuredVQA() {
 
     try {
       const result = await api.runStructuredVQAAnalysis({
-        videoPath: videoFile ? `/tmp/${videoFile.name}` : videoPath,
+        videoPath: uploadedServerPath || (videoFile ? `/tmp/${videoFile.name}` : videoPath),
         provider: selectedProvider,
         apiKey: isLocal ? 'local' : apiKey,
         numFrames: isLocal ? Math.min(numFrames, 16) : numFrames,
@@ -985,6 +1001,21 @@ export default function StructuredVQA() {
                   className="h-8 text-xs font-mono"
                 />
               </div>
+              {isUploading && (
+                <div className="space-y-1">
+                  <div className="flex justify-between text-xs text-muted-foreground">
+                    <span>Uploading to server…</span>
+                    <span>{uploadProgress}%</span>
+                  </div>
+                  <Progress value={uploadProgress} className="h-1.5" />
+                </div>
+              )}
+              {uploadedServerPath && !isUploading && (
+                <div className="flex items-center gap-1.5 text-xs text-green-600 dark:text-green-400">
+                  <CheckCircle2 className="w-3.5 h-3.5" />
+                  <span className="font-mono truncate">Ready: {uploadedServerPath.split('/').pop()}</span>
+                </div>
+              )}
               {videoUrl && (
                 <video
                   src={videoUrl}
@@ -996,18 +1027,48 @@ export default function StructuredVQA() {
           </Card>
 
           {/* Run Button */}
-          <Button
-            className="w-full"
-            size="lg"
-            disabled={isAnalyzing || (!videoPath && !videoFile) || (!isLocal && !apiKey) || (isLocal && !selectedModel)}
-            onClick={runAnalysis}
-          >
-            {isAnalyzing ? (
-              <><Loader2 className="w-4 h-4 mr-2 animate-spin" />分析中...</>
-            ) : (
-              <><Cpu className="w-4 h-4 mr-2" />运行 VQA 分析</>
-            )}
-          </Button>
+          <div className="grid grid-cols-2 gap-2">
+            <Button
+              className="col-span-2"
+              size="lg"
+              disabled={isAnalyzing || isUploading || (!videoPath && !videoFile) || (!isLocal && !apiKey) || (isLocal && !selectedModel)}
+              onClick={runAnalysis}
+            >
+              {isAnalyzing ? (
+                <><Loader2 className="w-4 h-4 mr-2 animate-spin" />分析中...</>
+              ) : (
+                <><Cpu className="w-4 h-4 mr-2" />运行 VQA 分析</>
+              )}
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="col-span-2"
+              disabled={isAnalyzing}
+              onClick={async () => {
+                setIsAnalyzing(true);
+                setError(null);
+                setProgress(20);
+                setProgressMsg('Loading demo pick-and-place analysis…');
+                try {
+                  const result = await api.runDemoAnalysis('Pick and Place Red Cup');
+                  setProgress(100);
+                  setProgressMsg('Demo loaded!');
+                  if (result.analysis) {
+                    setAnalysis(result.analysis);
+                  }
+                } catch (err: any) {
+                  setError(`Demo failed: ${err.message}`);
+                } finally {
+                  setIsAnalyzing(false);
+                  setTimeout(() => { setProgress(0); setProgressMsg(''); }, 1500);
+                }
+              }}
+            >
+              <Sparkles className="w-3.5 h-3.5 mr-1.5" />
+              Demo Mode (no video/API key needed)
+            </Button>
+          </div>
 
           {/* Progress */}
           {isAnalyzing && (

@@ -12,7 +12,7 @@ export function Footer() {
   ];
 
   const socialLinks = [
-    { icon: Github, href: '#', label: 'GitHub' },
+    { icon: Github, href: 'https://github.com/RoboMemo', label: 'GitHub' },
     { icon: Twitter, href: '#', label: 'Twitter' },
     { icon: Linkedin, href: '#', label: 'LinkedIn' },
     { icon: Mail, href: 'mailto:contact@robomemo.ai', label: 'Email' },
@@ -24,7 +24,7 @@ export function Footer() {
         <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
           {/* Logo & Tagline */}
           <div>
-            <h3 className="text-xl font-bold text-white mb-2">RoboMemo</h3>
+            <img src="/images/robomemo-logo.png" alt="RoboMemo" className="h-10 w-auto mb-2" />
             <p className="text-white/60 text-sm">{t('footer.tagline')}</p>
           </div>
 
@@ -53,6 +53,8 @@ export function Footer() {
                 <a
                   key={social.label}
                   href={social.href}
+                  target="_blank"
+                  rel="noopener noreferrer"
                   className="text-white/60 hover:text-white transition-colors duration-200"
                   aria-label={social.label}
                 >
