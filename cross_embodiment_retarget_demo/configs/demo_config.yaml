@@ -76,7 +76,7 @@ sonic:
 # Robot Configuration
 # ============================================================
 robot:
-  # Options: "unitree_g1", "fourier_gr1t2"
+  # Options: "unitree_g1", "unitree_h1", "fourier_gr1t2"
   type: "unitree_g1"
 
   unitree_g1:
@@ -98,6 +98,54 @@ robot:
       0.0, 0.0, 0.0, 0.0, 0.0, 0.0, # left leg (6)
       0.0, 0.0, 0.0, 0.0, 0.0, 0.0, # right leg (6)
       0.0, 0.0, 0.0, 0.0,       # hands (4)
+    ]
+
+  unitree_h1:
+    num_joints: 19
+    kp: 120.0
+    kd: 3.0
+    joint_limits:
+      position_min: -3.14
+      position_max: 3.14
+      velocity_max: 8.0
+      torque_max: 180.0
+    # Joint layout (19 DOF):
+    #   [0]     waist yaw (1)
+    #   [1:5]   left arm: shoulder P/R/Y, elbow (4)
+    #   [5:9]   right arm: shoulder P/R/Y, elbow (4)
+    #   [9:14]  left leg: hip Y/R/P, knee, ankle P (5)
+    #   [14:19] right leg: hip Y/R/P, knee, ankle P (5)
+    default_pose: [
+      0.0,                       # waist yaw (1)
+      0.0, 0.0, 0.0, 0.0,       # left arm (4)
+      0.0, 0.0, 0.0, 0.0,       # right arm (4)
+      0.0, 0.0, 0.0, 0.0, 0.0,  # left leg (5)
+      0.0, 0.0, 0.0, 0.0, 0.0,  # right leg (5)
+    ]
+
+  fourier_gr1t2:
+    num_joints: 32
+    kp: 80.0
+    kd: 2.5
+    joint_limits:
+      position_min: -3.14
+      position_max: 3.14
+      velocity_max: 12.0
+      torque_max: 250.0
+    # Joint layout (32 DOF):
+    #   [0:3]   waist: yaw, pitch, roll (3)
+    #   [3:10]  left arm: shoulder P/R/Y, elbow P/R, wrist P/Y (7)
+    #   [10:17] right arm: shoulder P/R/Y, elbow P/R, wrist P/Y (7)
+    #   [17:23] left leg: hip Y/R/P, knee, ankle P/R (6)
+    #   [23:29] right leg: hip Y/R/P, knee, ankle P/R (6)
+    #   [29:32] head: yaw, pitch, roll (3)
+    default_pose: [
+      0.0, 0.0, 0.0,                       # waist (3)
+      0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,  # left arm (7)
+      0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,  # right arm (7)
+      0.0, 0.0, 0.0, 0.0, 0.0, 0.0,        # left leg (6)
+      0.0, 0.0, 0.0, 0.0, 0.0, 0.0,        # right leg (6)
+      0.0, 0.0, 0.0,                        # head (3)
     ]
 
 # ============================================================

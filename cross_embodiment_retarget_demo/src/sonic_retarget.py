@@ -32,6 +32,12 @@ except ImportError:
     ort = None  # type: ignore
 
 
+def _get_robot_cfg(cfg: dict) -> dict:
+    """Get active robot sub-config from top-level config."""
+    robot_type = cfg["robot"]["type"]
+    return cfg["robot"][robot_type]
+
+
 class SonicBackend(ABC):
     """Abstract interface for SONIC inference."""
 
@@ -45,7 +51,7 @@ class SonicBackend(ABC):
 
         Args:
             body_pose: Current full-body pose from input source.
-            proprioception: Current robot state [joint_pos(29), joint_vel(29), gravity(3)] = (61,)
+            proprioception: Current robot state [joint_pos, joint_vel, gravity]
 
         Returns:
             Joint target positions (num_joints,) float32
@@ -66,24 +72,35 @@ class MockSonicBackend(SonicBackend):
 
     def __init__(self):
         self._num_joints = 29
+        self._robot_type = "unitree_g1"
         self._default_pose: Optional[np.ndarray] = None
 
     def init(self, cfg: dict) -> None:
-        robot_cfg = cfg["robot"]["unitree_g1"]
+        robot_cfg = _get_robot_cfg(cfg)
+        self._robot_type = cfg["robot"]["type"]
         self._num_joints = robot_cfg.get("num_joints", 29)
         self._default_pose = np.array(
             robot_cfg.get("default_pose", [0.0] * self._num_joints),
             dtype=np.float32,
         )
-        logger.info(f"MockSonicBackend initialised ({self._num_joints} joints)")
+        logger.info(f"MockSonicBackend initialised: {self._robot_type} ({self._num_joints} joints)")
 
     def num_joints(self) -> int:
         return self._num_joints
 
     def infer(self, body_pose: BodyPose, proprioception: np.ndarray) -> np.ndarray:
-        """Simple analytical mapping from body keypoints to joint targets.
+        """Dispatch to robot-specific analytical IK."""
+        if self._robot_type == "unitree_h1":
+            return self._infer_h1(body_pose)
+        elif self._robot_type == "fourier_gr1t2":
+            return self._infer_gr1t2(body_pose)
+        else:
+            return self._infer_g1(body_pose)
 
-        Joint layout (Unitree G1, 29 DOF):
+    # ── Unitree G1 (29 DOF) ──────────────────────────────────
+
+    def _infer_g1(self, body_pose: BodyPose) -> np.ndarray:
+        """Joint layout (Unitree G1, 29 DOF):
           [0:3]   torso (waist yaw, pitch, roll)
           [3:8]   left arm (shoulder pitch/roll/yaw, elbow, wrist)
           [8:13]  right arm (shoulder pitch/roll/yaw, elbow, wrist)
@@ -93,27 +110,21 @@ class MockSonicBackend(SonicBackend):
         """
         joints = self._default_pose.copy()
 
-        # ── Torso from head/waist ──
         head_pos = body_pose.head.position
-        # Torso yaw from head x offset
         joints[0] = np.clip(head_pos[0] * 0.5, -0.5, 0.5)
-        # Torso pitch from head forward lean
         joints[1] = np.clip((head_pos[1] - 0.0) * 0.3, -0.3, 0.3)
 
         if body_pose.waist is not None:
             waist_pos = body_pose.waist.position
-            joints[2] = np.clip(waist_pos[0] * 0.3, -0.3, 0.3)  # roll
+            joints[2] = np.clip(waist_pos[0] * 0.3, -0.3, 0.3)
 
-        # ── Left arm ──
         lh = body_pose.left_hand.position
-        joints[3] = np.clip(-(lh[2] - 1.0) * 1.5, -1.5, 1.5)   # shoulder pitch
-        joints[4] = np.clip((lh[0] + 0.3) * 1.0, -1.0, 1.0)     # shoulder roll
-        joints[5] = np.clip(lh[1] * 0.5, -0.8, 0.8)              # shoulder yaw
-        # Elbow: distance from shoulder to hand
+        joints[3] = np.clip(-(lh[2] - 1.0) * 1.5, -1.5, 1.5)
+        joints[4] = np.clip((lh[0] + 0.3) * 1.0, -1.0, 1.0)
+        joints[5] = np.clip(lh[1] * 0.5, -0.8, 0.8)
         arm_len = np.linalg.norm(lh - np.array([-0.2, 0.0, 1.3]))
-        joints[6] = np.clip(-(arm_len - 0.4) * 3.0, -2.0, 0.0)  # elbow flexion
+        joints[6] = np.clip(-(arm_len - 0.4) * 3.0, -2.0, 0.0)
 
-        # ── Right arm ──
         rh = body_pose.right_hand.position
         joints[8] = np.clip(-(rh[2] - 1.0) * 1.5, -1.5, 1.5)
         joints[9] = np.clip((rh[0] - 0.3) * 1.0, -1.0, 1.0)
@@ -121,24 +132,132 @@ class MockSonicBackend(SonicBackend):
         arm_len_r = np.linalg.norm(rh - np.array([0.2, 0.0, 1.3]))
         joints[11] = np.clip(-(arm_len_r - 0.4) * 3.0, -2.0, 0.0)
 
-        # ── Legs (if tracked) ──
         if body_pose.has_leg_tracking:
             la = body_pose.left_ankle.position
             ra = body_pose.right_ankle.position
-
-            # Left leg
-            joints[13] = np.clip(la[0] * 0.5, -0.5, 0.5)          # hip yaw
-            joints[14] = np.clip(-(la[0] + 0.1) * 0.8, -0.5, 0.5) # hip roll
-            joints[15] = np.clip(la[1] * 1.0, -1.0, 1.0)          # hip pitch
-            joints[16] = np.clip(la[2] * 4.0, 0.0, 2.0)           # knee
-            joints[17] = np.clip(-la[1] * 0.8, -0.8, 0.8)         # ankle pitch
-
-            # Right leg
+            joints[13] = np.clip(la[0] * 0.5, -0.5, 0.5)
+            joints[14] = np.clip(-(la[0] + 0.1) * 0.8, -0.5, 0.5)
+            joints[15] = np.clip(la[1] * 1.0, -1.0, 1.0)
+            joints[16] = np.clip(la[2] * 4.0, 0.0, 2.0)
+            joints[17] = np.clip(-la[1] * 0.8, -0.8, 0.8)
             joints[19] = np.clip(ra[0] * 0.5, -0.5, 0.5)
             joints[20] = np.clip(-(ra[0] - 0.1) * 0.8, -0.5, 0.5)
             joints[21] = np.clip(ra[1] * 1.0, -1.0, 1.0)
             joints[22] = np.clip(ra[2] * 4.0, 0.0, 2.0)
             joints[23] = np.clip(-ra[1] * 0.8, -0.8, 0.8)
+
+        return joints
+
+    # ── Unitree H1 (19 DOF) ──────────────────────────────────
+
+    def _infer_h1(self, body_pose: BodyPose) -> np.ndarray:
+        """Joint layout (Unitree H1, 19 DOF):
+          [0]     waist yaw (1)
+          [1:5]   left arm: shoulder P/R/Y, elbow (4)
+          [5:9]   right arm: shoulder P/R/Y, elbow (4)
+          [9:14]  left leg: hip Y/R/P, knee, ankle P (5)
+          [14:19] right leg: hip Y/R/P, knee, ankle P (5)
+        """
+        joints = self._default_pose.copy()
+
+        head_pos = body_pose.head.position
+        joints[0] = np.clip(head_pos[0] * 0.5, -0.5, 0.5)  # waist yaw
+
+        # Left arm (4 DOF, no wrist)
+        lh = body_pose.left_hand.position
+        joints[1] = np.clip(-(lh[2] - 1.0) * 1.5, -1.5, 1.5)   # shoulder pitch
+        joints[2] = np.clip((lh[0] + 0.3) * 1.0, -1.0, 1.0)     # shoulder roll
+        joints[3] = np.clip(lh[1] * 0.5, -0.8, 0.8)              # shoulder yaw
+        arm_len = np.linalg.norm(lh - np.array([-0.2, 0.0, 1.3]))
+        joints[4] = np.clip(-(arm_len - 0.4) * 3.0, -2.0, 0.0)  # elbow
+
+        # Right arm (4 DOF, no wrist)
+        rh = body_pose.right_hand.position
+        joints[5] = np.clip(-(rh[2] - 1.0) * 1.5, -1.5, 1.5)
+        joints[6] = np.clip((rh[0] - 0.3) * 1.0, -1.0, 1.0)
+        joints[7] = np.clip(rh[1] * 0.5, -0.8, 0.8)
+        arm_len_r = np.linalg.norm(rh - np.array([0.2, 0.0, 1.3]))
+        joints[8] = np.clip(-(arm_len_r - 0.4) * 3.0, -2.0, 0.0)
+
+        # Legs (5 DOF each, no ankle roll)
+        if body_pose.has_leg_tracking:
+            la = body_pose.left_ankle.position
+            ra = body_pose.right_ankle.position
+            joints[9] = np.clip(la[0] * 0.5, -0.5, 0.5)           # hip yaw
+            joints[10] = np.clip(-(la[0] + 0.1) * 0.8, -0.5, 0.5) # hip roll
+            joints[11] = np.clip(la[1] * 1.0, -1.0, 1.0)          # hip pitch
+            joints[12] = np.clip(la[2] * 4.0, 0.0, 2.0)           # knee
+            joints[13] = np.clip(-la[1] * 0.8, -0.8, 0.8)         # ankle pitch
+            joints[14] = np.clip(ra[0] * 0.5, -0.5, 0.5)
+            joints[15] = np.clip(-(ra[0] - 0.1) * 0.8, -0.5, 0.5)
+            joints[16] = np.clip(ra[1] * 1.0, -1.0, 1.0)
+            joints[17] = np.clip(ra[2] * 4.0, 0.0, 2.0)
+            joints[18] = np.clip(-ra[1] * 0.8, -0.8, 0.8)
+
+        return joints
+
+    # ── Fourier GR1T2 (32 DOF) ───────────────────────────────
+
+    def _infer_gr1t2(self, body_pose: BodyPose) -> np.ndarray:
+        """Joint layout (Fourier GR1T2, 32 DOF):
+          [0:3]   waist: yaw, pitch, roll (3)
+          [3:10]  left arm: shoulder P/R/Y, elbow P/R, wrist P/Y (7)
+          [10:17] right arm: shoulder P/R/Y, elbow P/R, wrist P/Y (7)
+          [17:23] left leg: hip Y/R/P, knee, ankle P/R (6)
+          [23:29] right leg: hip Y/R/P, knee, ankle P/R (6)
+          [29:32] head: yaw, pitch, roll (3)
+        """
+        joints = self._default_pose.copy()
+
+        head_pos = body_pose.head.position
+        # Waist
+        joints[0] = np.clip(head_pos[0] * 0.5, -0.5, 0.5)  # yaw
+        joints[1] = np.clip(head_pos[1] * 0.3, -0.3, 0.3)  # pitch
+        if body_pose.waist is not None:
+            joints[2] = np.clip(body_pose.waist.position[0] * 0.3, -0.3, 0.3)  # roll
+
+        # Left arm (7 DOF)
+        lh = body_pose.left_hand.position
+        joints[3] = np.clip(-(lh[2] - 1.0) * 1.5, -1.5, 1.5)   # shoulder pitch
+        joints[4] = np.clip((lh[0] + 0.3) * 1.0, -1.0, 1.0)     # shoulder roll
+        joints[5] = np.clip(lh[1] * 0.5, -0.8, 0.8)              # shoulder yaw
+        arm_len = np.linalg.norm(lh - np.array([-0.2, 0.0, 1.3]))
+        joints[6] = np.clip(-(arm_len - 0.4) * 3.0, -2.0, 0.0)  # elbow pitch
+        joints[7] = np.clip(lh[0] * 0.3, -0.5, 0.5)              # elbow roll
+        joints[8] = np.clip(lh[1] * 0.4, -0.6, 0.6)              # wrist pitch
+        joints[9] = np.clip(lh[0] * 0.2, -0.4, 0.4)              # wrist yaw
+
+        # Right arm (7 DOF)
+        rh = body_pose.right_hand.position
+        joints[10] = np.clip(-(rh[2] - 1.0) * 1.5, -1.5, 1.5)
+        joints[11] = np.clip((rh[0] - 0.3) * 1.0, -1.0, 1.0)
+        joints[12] = np.clip(rh[1] * 0.5, -0.8, 0.8)
+        arm_len_r = np.linalg.norm(rh - np.array([0.2, 0.0, 1.3]))
+        joints[13] = np.clip(-(arm_len_r - 0.4) * 3.0, -2.0, 0.0)
+        joints[14] = np.clip(rh[0] * 0.3, -0.5, 0.5)
+        joints[15] = np.clip(rh[1] * 0.4, -0.6, 0.6)
+        joints[16] = np.clip(rh[0] * 0.2, -0.4, 0.4)
+
+        # Legs (6 DOF each, with ankle roll)
+        if body_pose.has_leg_tracking:
+            la = body_pose.left_ankle.position
+            ra = body_pose.right_ankle.position
+            joints[17] = np.clip(la[0] * 0.5, -0.5, 0.5)
+            joints[18] = np.clip(-(la[0] + 0.1) * 0.8, -0.5, 0.5)
+            joints[19] = np.clip(la[1] * 1.0, -1.0, 1.0)
+            joints[20] = np.clip(la[2] * 4.0, 0.0, 2.0)
+            joints[21] = np.clip(-la[1] * 0.8, -0.8, 0.8)
+            joints[22] = np.clip(la[0] * 0.3, -0.3, 0.3)  # ankle roll
+            joints[23] = np.clip(ra[0] * 0.5, -0.5, 0.5)
+            joints[24] = np.clip(-(ra[0] - 0.1) * 0.8, -0.5, 0.5)
+            joints[25] = np.clip(ra[1] * 1.0, -1.0, 1.0)
+            joints[26] = np.clip(ra[2] * 4.0, 0.0, 2.0)
+            joints[27] = np.clip(-ra[1] * 0.8, -0.8, 0.8)
+            joints[28] = np.clip(ra[0] * 0.3, -0.3, 0.3)
+
+        # Head (3 DOF)
+        joints[29] = np.clip(head_pos[0] * 0.8, -0.8, 0.8)  # head yaw
+        joints[30] = np.clip(head_pos[1] * 0.5, -0.5, 0.5)  # head pitch
 
         return joints
 
@@ -194,11 +313,12 @@ class OnnxSonicBackend(SonicBackend):
             str(decoder_path), sess_options=sess_opts, providers=providers
         )
 
-        robot_cfg = cfg["robot"]["unitree_g1"]
+        robot_cfg = _get_robot_cfg(cfg)
         self._num_joints = robot_cfg.get("num_joints", 29)
         logger.info(
             f"OnnxSonicBackend initialised: encoder={encoder_path.name}, "
-            f"decoder={decoder_path.name}, device={device}"
+            f"decoder={decoder_path.name}, device={device}, "
+            f"robot={cfg['robot']['type']} ({self._num_joints} joints)"
         )
 
     def num_joints(self) -> int:
@@ -279,7 +399,8 @@ class SonicRetarget:
     def __init__(self, cfg: dict):
         self._cfg = cfg
         sonic_cfg = cfg["sonic"]
-        robot_cfg = cfg["robot"]["unitree_g1"]
+        robot_cfg = _get_robot_cfg(cfg)
+        self._robot_type = cfg["robot"]["type"]
         safety_cfg = cfg["safety"]
 
         # Select backend
@@ -357,8 +478,9 @@ class SonicRetarget:
         targets = self._prev_targets + delta
 
         # Joint limit clamping
-        pos_min = self._cfg["robot"]["unitree_g1"]["joint_limits"]["position_min"]
-        pos_max = self._cfg["robot"]["unitree_g1"]["joint_limits"]["position_max"]
+        robot_cfg = _get_robot_cfg(self._cfg)
+        pos_min = robot_cfg["joint_limits"]["position_min"]
+        pos_max = robot_cfg["joint_limits"]["position_max"]
         targets = np.clip(targets, pos_min, pos_max)
 
         self._prev_targets = targets

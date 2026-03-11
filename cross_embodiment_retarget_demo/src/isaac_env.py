@@ -79,7 +79,8 @@ class MockPhysicsEnv(SimEnv):
         self._viz_running = False
 
     def init(self, cfg: dict) -> None:
-        robot_cfg = cfg["robot"]["unitree_g1"]
+        robot_type = cfg["robot"]["type"]
+        robot_cfg = cfg["robot"][robot_type]
         sim_cfg = cfg["simulation"]["mock_physics"]
 
         self._num_joints = robot_cfg.get("num_joints", 29)
@@ -161,12 +162,13 @@ class IsaacLabEnv(SimEnv):
             ) from e
 
         isaac_cfg = cfg["simulation"]["isaac_lab"]
-        robot_cfg = cfg["robot"]["unitree_g1"]
+        robot_type = cfg["robot"]["type"]
+        robot_cfg = cfg["robot"][robot_type]
         self._num_joints = robot_cfg.get("num_joints", 29)
 
-        # TODO: Create proper DirectRLEnv subclass with G1 USD asset
+        # TODO: Create proper DirectRLEnv subclass with robot USD asset
         # For now, initialise Isaac Sim and load basic scene
-        logger.info("IsaacLabEnv: Initialising Isaac Sim scene…")
+        logger.info(f"IsaacLabEnv: Initialising Isaac Sim scene for {robot_type}…")
 
         try:
             from omni.isaac.lab.app import AppLauncher

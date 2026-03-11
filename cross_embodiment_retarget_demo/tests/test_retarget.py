@@ -28,8 +28,38 @@ from src.sonic_retarget import SonicRetarget, MockSonicBackend
 from src.isaac_env import MockPhysicsEnv
 
 
-def _make_test_config() -> dict:
-    """Minimal config for testing."""
+def _make_test_config(robot_type: str = "unitree_g1") -> dict:
+    """Minimal config for testing. Supports all robot types."""
+    robot_configs = {
+        "unitree_g1": {
+            "num_joints": 29,
+            "kp": 100.0, "kd": 2.0,
+            "joint_limits": {
+                "position_min": -3.14, "position_max": 3.14,
+                "velocity_max": 10.0, "torque_max": 200.0,
+            },
+            "default_pose": [0.0] * 29,
+        },
+        "unitree_h1": {
+            "num_joints": 19,
+            "kp": 120.0, "kd": 3.0,
+            "joint_limits": {
+                "position_min": -3.14, "position_max": 3.14,
+                "velocity_max": 8.0, "torque_max": 180.0,
+            },
+            "default_pose": [0.0] * 19,
+        },
+        "fourier_gr1t2": {
+            "num_joints": 32,
+            "kp": 80.0, "kd": 2.5,
+            "joint_limits": {
+                "position_min": -3.14, "position_max": 3.14,
+                "velocity_max": 12.0, "torque_max": 250.0,
+            },
+            "default_pose": [0.0] * 32,
+        },
+    }
+    num_joints = robot_configs[robot_type]["num_joints"]
     return {
         "input": {
             "source": "mock",
@@ -52,19 +82,11 @@ def _make_test_config() -> dict:
             "max_inference_latency_ms": 20,
             "hybrid_encoder": {"upper_body_keypoints": ["head", "left_hand", "right_hand"], "lower_body_future_frames": 10},
             "fsq_quantizer": {"codebook_size": 1024, "latent_dim": 256},
-            "control_decoder": {"output_dim": 29},
+            "control_decoder": {"output_dim": num_joints},
         },
         "robot": {
-            "type": "unitree_g1",
-            "unitree_g1": {
-                "num_joints": 29,
-                "kp": 100.0, "kd": 2.0,
-                "joint_limits": {
-                    "position_min": -3.14, "position_max": 3.14,
-                    "velocity_max": 10.0, "torque_max": 200.0,
-                },
-                "default_pose": [0.0] * 29,
-            },
+            "type": robot_type,
+            **{rt: rc for rt, rc in robot_configs.items()},
         },
         "simulation": {
             "backend": "mock_physics",
@@ -269,6 +291,72 @@ class TestIntegration(unittest.TestCase):
         # Should have returned close to default
         final_pos = env.get_joint_pos()
         self.assertTrue(np.all(np.abs(final_pos) < 1.0), "Should converge toward default")
+        env.close()
+
+
+class TestUnitreeH1(unittest.TestCase):
+    """Tests for Unitree H1 (19 DOF) robot."""
+
+    def setUp(self):
+        self.cfg = _make_test_config("unitree_h1")
+        self.retarget = SonicRetarget(self.cfg)
+
+    def test_infer_returns_correct_shape(self):
+        bp = MOTION_GENERATORS["stand"](0.0)
+        joints = self.retarget.infer(bp)
+        self.assertEqual(joints.shape, (19,))
+
+    def test_joints_within_limits(self):
+        for t in [0.0, 0.5, 1.0, 2.0]:
+            bp = MOTION_GENERATORS["walk"](t)
+            joints = self.retarget.infer(bp)
+            self.assertTrue(
+                np.all(joints >= -3.14) and np.all(joints <= 3.14),
+                f"H1 joints out of range at t={t}"
+            )
+
+    def test_full_pipeline(self):
+        env = MockPhysicsEnv()
+        env.init(self.cfg)
+        gen = MOTION_GENERATORS["walk"]
+        for step in range(50):
+            bp = gen(step * 0.02)
+            joints = self.retarget.infer(bp)
+            env.step(joints)
+            self.assertTrue(np.all(np.isfinite(env.get_joint_pos())))
+        env.close()
+
+
+class TestFourierGR1T2(unittest.TestCase):
+    """Tests for Fourier GR1T2 (32 DOF) robot."""
+
+    def setUp(self):
+        self.cfg = _make_test_config("fourier_gr1t2")
+        self.retarget = SonicRetarget(self.cfg)
+
+    def test_infer_returns_correct_shape(self):
+        bp = MOTION_GENERATORS["stand"](0.0)
+        joints = self.retarget.infer(bp)
+        self.assertEqual(joints.shape, (32,))
+
+    def test_joints_within_limits(self):
+        for t in [0.0, 0.5, 1.0, 2.0]:
+            bp = MOTION_GENERATORS["walk"](t)
+            joints = self.retarget.infer(bp)
+            self.assertTrue(
+                np.all(joints >= -3.14) and np.all(joints <= 3.14),
+                f"GR1T2 joints out of range at t={t}"
+            )
+
+    def test_full_pipeline(self):
+        env = MockPhysicsEnv()
+        env.init(self.cfg)
+        gen = MOTION_GENERATORS["wave"]
+        for step in range(50):
+            bp = gen(step * 0.02)
+            joints = self.retarget.infer(bp)
+            env.step(joints)
+            self.assertTrue(np.all(np.isfinite(env.get_joint_pos())))
         env.close()
 
 
