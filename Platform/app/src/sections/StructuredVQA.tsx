@@ -40,6 +40,8 @@ import type {
   VQAAnnotationRecord,
   VQAConfidenceScores,
   VisualGrounding,
+  Dataset,
+  Episode,
 } from '@/types';
 import { GroundingBadge, GroundingDetail, TemporalConsistencyAlert } from '@/components/GroundingOverlay';
 
@@ -629,6 +631,13 @@ export default function StructuredVQA() {
 
   const isLocal = selectedProvider === 'local';
 
+  // Dataset/Episode selection (like Auto-Annotation)
+  const [datasets, setDatasets] = useState<Dataset[]>([]);
+  const [episodes, setEpisodes] = useState<Episode[]>([]);
+  const [selectedDataset, setSelectedDataset] = useState<string>('');
+  const [selectedEpisode, setSelectedEpisode] = useState<string>('');
+  const [inputMode, setInputMode] = useState<'dataset' | 'upload'>('dataset');
+
   // Video state
   const [videoPath, setVideoPath] = useState('');
   const [videoFile, setVideoFile] = useState<File | null>(null);
@@ -650,15 +659,25 @@ export default function StructuredVQA() {
   const [history, setHistory] = useState<VQAAnnotationRecord[]>([]);
   const [showHistory, setShowHistory] = useState(false);
 
-  // Fetch providers & history on mount
+  // Fetch providers & history & datasets on mount
   useEffect(() => {
     api.getVLMProviders().then(setProviders).catch(console.error);
     api.getStructuredAnalyses().then(setHistory).catch(console.error);
+    api.getDatasets().then(setDatasets).catch(console.error);
 
     // Restore API key from localStorage
     const saved = localStorage.getItem('vlm_api_key');
     if (saved) setApiKey(saved);
   }, []);
+
+  // Load episodes when dataset changes
+  useEffect(() => {
+    if (selectedDataset) {
+      api.getDatasetEpisodes(selectedDataset).then(setEpisodes).catch(console.error);
+    } else {
+      setEpisodes([]);
+    }
+  }, [selectedDataset]);
 
   // 切换到本地模式时读取 Ollama 模型列表
   useEffect(() => {
@@ -976,52 +995,149 @@ export default function StructuredVQA() {
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-2.5">
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept="video/*"
-                className="hidden"
-                onChange={handleFileSelect}
-              />
-              <Button
-                variant="outline"
-                size="sm"
-                className="w-full"
-                onClick={() => fileInputRef.current?.click()}
-              >
-                <Upload className="w-3.5 h-3.5 mr-1.5" />
-                选择视频文件
-              </Button>
-              <div className="space-y-1">
-                <Label className="text-xs">或输入服务器路径</Label>
-                <Input
-                  placeholder="/path/to/video.mp4"
-                  value={videoPath}
-                  onChange={(e) => setVideoPath(e.target.value)}
-                  className="h-8 text-xs font-mono"
-                />
+              {/* Input mode toggle */}
+              <div className="grid grid-cols-2 gap-1 p-0.5 rounded-md bg-muted">
+                <button
+                  className={`text-xs py-1 px-2 rounded transition-colors ${inputMode === 'dataset' ? 'bg-background shadow font-medium' : 'text-muted-foreground hover:text-foreground'}`}
+                  onClick={() => setInputMode('dataset')}
+                >
+                  📊 From Dataset
+                </button>
+                <button
+                  className={`text-xs py-1 px-2 rounded transition-colors ${inputMode === 'upload' ? 'bg-background shadow font-medium' : 'text-muted-foreground hover:text-foreground'}`}
+                  onClick={() => setInputMode('upload')}
+                >
+                  📁 Upload / Path
+                </button>
               </div>
-              {isUploading && (
-                <div className="space-y-1">
-                  <div className="flex justify-between text-xs text-muted-foreground">
-                    <span>Uploading to server…</span>
-                    <span>{uploadProgress}%</span>
+
+              {inputMode === 'dataset' ? (
+                <div className="space-y-2">
+                  <div className="space-y-1">
+                    <Label className="text-xs">Dataset</Label>
+                    <Select value={selectedDataset} onValueChange={(v) => { setSelectedDataset(v); setSelectedEpisode(''); }}>
+                      <SelectTrigger className="h-8 text-sm">
+                        <SelectValue placeholder="Select dataset..." />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {datasets.map(ds => (
+                          <SelectItem key={ds.id} value={ds.id}>
+                            <div className="flex items-center gap-1.5">
+                              <span>{ds.name}</span>
+                              <span className="text-muted-foreground text-xs">({ds.episodeCount} ep)</span>
+                            </div>
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
                   </div>
-                  <Progress value={uploadProgress} className="h-1.5" />
+                  {selectedDataset && (
+                    <div className="space-y-1">
+                      <Label className="text-xs">Episode</Label>
+                      <Select value={selectedEpisode} onValueChange={(v) => {
+                        setSelectedEpisode(v);
+                        const ep = episodes.find(e => e.id === v);
+                        if (ep) {
+                          setVideoPath(`episode_${v}`);
+                          setAnalysis(null);
+                          setError(null);
+                        }
+                      }}>
+                        <SelectTrigger className="h-8 text-sm">
+                          <SelectValue placeholder="Select episode..." />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {episodes.map(ep => (
+                            <SelectItem key={ep.id} value={ep.id}>
+                              <div className="flex items-center gap-1.5">
+                                <span className="truncate">{ep.name || ep.id}</span>
+                                <span className="text-muted-foreground text-xs shrink-0">{ep.frameCount}f · {ep.duration?.toFixed(1)}s</span>
+                              </div>
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  )}
+                  {selectedEpisode && (() => {
+                    const ep = episodes.find(e => e.id === selectedEpisode);
+                    const ds = datasets.find(d => d.id === selectedDataset);
+                    if (!ep) return null;
+                    const sensors = ds?.sensorConfig?.sensors || [];
+                    return (
+                      <div className="p-2 rounded border bg-muted/30 space-y-1.5">
+                        <div className="flex items-center justify-between text-xs">
+                          <span className="font-medium">{ep.name || ep.id}</span>
+                          <Badge variant="outline" className="text-[10px]">{(ep as any).skill || ds?.robotType}</Badge>
+                        </div>
+                        <div className="flex gap-2 text-[10px] text-muted-foreground">
+                          <span>{ep.frameCount} frames</span>
+                          <span>{ep.duration?.toFixed(1)}s</span>
+                          <span>{(ep as any).fps || 30} fps</span>
+                        </div>
+                        {sensors.length > 0 && (
+                          <div className="flex flex-wrap gap-1">
+                            {sensors.map((s: any, i: number) => (
+                              <span key={i} className="text-[9px] px-1.5 py-0.5 rounded bg-primary/10 text-primary">
+                                {s.name || s.type}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
                 </div>
-              )}
-              {uploadedServerPath && !isUploading && (
-                <div className="flex items-center gap-1.5 text-xs text-green-600 dark:text-green-400">
-                  <CheckCircle2 className="w-3.5 h-3.5" />
-                  <span className="font-mono truncate">Ready: {uploadedServerPath.split('/').pop()}</span>
-                </div>
-              )}
-              {videoUrl && (
-                <video
-                  src={videoUrl}
-                  controls
-                  className="w-full rounded border aspect-video object-cover bg-black"
-                />
+              ) : (
+                <>
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept="video/*"
+                    className="hidden"
+                    onChange={handleFileSelect}
+                  />
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="w-full"
+                    onClick={() => fileInputRef.current?.click()}
+                  >
+                    <Upload className="w-3.5 h-3.5 mr-1.5" />
+                    选择视频文件
+                  </Button>
+                  <div className="space-y-1">
+                    <Label className="text-xs">或输入服务器路径</Label>
+                    <Input
+                      placeholder="/path/to/video.mp4"
+                      value={videoPath}
+                      onChange={(e) => setVideoPath(e.target.value)}
+                      className="h-8 text-xs font-mono"
+                    />
+                  </div>
+                  {isUploading && (
+                    <div className="space-y-1">
+                      <div className="flex justify-between text-xs text-muted-foreground">
+                        <span>Uploading to server…</span>
+                        <span>{uploadProgress}%</span>
+                      </div>
+                      <Progress value={uploadProgress} className="h-1.5" />
+                    </div>
+                  )}
+                  {uploadedServerPath && !isUploading && (
+                    <div className="flex items-center gap-1.5 text-xs text-green-600 dark:text-green-400">
+                      <CheckCircle2 className="w-3.5 h-3.5" />
+                      <span className="font-mono truncate">Ready: {uploadedServerPath.split('/').pop()}</span>
+                    </div>
+                  )}
+                  {videoUrl && (
+                    <video
+                      src={videoUrl}
+                      controls
+                      className="w-full rounded border aspect-video object-cover bg-black"
+                    />
+                  )}
+                </>
               )}
             </CardContent>
           </Card>
