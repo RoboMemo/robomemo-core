@@ -135,7 +135,7 @@ class DemoRunner:
             and HAS_MPL
         )
         if viz_enabled:
-            self._viz = LiveVisualiser()
+            self._viz = LiveVisualiser(robot_type=self._cfg["robot"]["type"])
             self._viz.init()
 
         target_dt = self._cfg["simulation"].get(
