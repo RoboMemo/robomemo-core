@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+cross_embodiment_retarget_demo/checkpoints/
+cross_embodiment_retarget_demo/logs/
+*.onnx
+.env
+*.swp
+*~
+.DS_Store
