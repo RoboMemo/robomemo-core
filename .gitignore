@@ -31,9 +31,10 @@ yarn-error.log*
 # ──── Large binary / dataset files ───────────────────────────────────────────
 Platform/backend/data/*.h5
 Platform/backend/data/*.arrow
-Platform/backend/data/aloha_mobile_shrimp/train/
+Platform/backend/data/aloha_mobile_shrimp/
 Platform/backend/data/real_episodes/
 Platform/backend/data/genrobot_open_dataset/
+Platform/backend/data/datasets/
 Platform/backend/uploads/
 Platform/backend/das-datakit/
 
