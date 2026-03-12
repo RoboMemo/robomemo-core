@@ -38,7 +38,6 @@ import DataAugmentation from '@/sections/DataAugmentation';
 import AutoAnnotation from '@/sections/AutoAnnotation';
 import StructuredVQA from '@/sections/StructuredVQA';
 import PlatformStats from '@/sections/PlatformStats';
-import GenRobotDataset from '@/sections/GenRobotDataset';
 import UserManagement from '@/sections/UserManagement';
 import MyTasks from '@/sections/MyTasks';
 import TaskManagement from '@/sections/TaskManagement';
@@ -50,11 +49,10 @@ import BillingManagement from '@/sections/BillingManagement';import api from '@/
 import type { User } from '@/types';
 import './App.css';
 
-type Tab = 'datasets' | 'collection' | 'annotation' | 'visualization' | 'simulators' | 'augmentation' | 'autoannotation' | 'structuredvqa' | 'stats' | 'genrobot' | 'users' | 'mytasks' | 'tasks' | 'quality' | 'orders' | 'batch' | 'roboforce' | 'billing';
+type Tab = 'datasets' | 'collection' | 'annotation' | 'visualization' | 'simulators' | 'augmentation' | 'autoannotation' | 'structuredvqa' | 'stats' | 'users' | 'mytasks' | 'tasks' | 'quality' | 'orders' | 'batch' | 'roboforce' | 'billing';
 
 const tabs = [
   { id: 'datasets' as Tab, label: 'Datasets', icon: Database },
-  { id: 'genrobot' as Tab, label: 'GenRobot', icon: Database },
   { id: 'collection' as Tab, label: 'Collection', icon: Play },
   { id: 'annotation' as Tab, label: 'Annotation', icon: Tag },
   { id: 'autoannotation' as Tab, label: 'Auto-Annotation', icon: Wand2 },
@@ -129,8 +127,6 @@ function App() {
     switch (activeTab) {
       case 'datasets':
         return <DatasetManager />;
-      case 'genrobot':
-        return <GenRobotDataset />;
       case 'collection':
         return <DataCollection />;
       case 'annotation':
