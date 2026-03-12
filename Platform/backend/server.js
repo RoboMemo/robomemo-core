@@ -2276,6 +2276,104 @@ app.post('/api/roboforce/validate', authMiddleware, (req, res) => {
   });
 });
 
+// POST /api/roboforce/upload — upload video + create order + task
+app.post('/api/roboforce/upload', authMiddleware, upload.single('video'), async (req, res) => {
+  try {
+    const { datasetName, episodeName, description, preset, orderTitle } = req.body;
+    const videoFile = req.file;
+
+    if (!videoFile) {
+      return res.status(400).json({ error: 'No video file uploaded' });
+    }
+    if (!datasetName || !episodeName) {
+      return res.status(400).json({ error: 'datasetName and episodeName required' });
+    }
+
+    // 1. Create dataset
+    const datasetId = `ds_roboforce_${Date.now()}`;
+    Datasets.insert({
+      id: datasetId,
+      name: datasetName,
+      description: `RoboForce upload: ${datasetName}`,
+      format: 'roboforce',
+      robotType: 'RoboForce Titan',
+      sensorConfig: ROBOFORCE_PRESETS[preset] || { sensors: [] },
+      episodeCount: 1,
+    });
+
+    // 2. Create episode with video path
+    const episodeId = `ep_rf_${Date.now()}`;
+    const videoPath = videoFile.path.replace(/\\/g, '/'); // normalize path
+    Episodes.insert({
+      id: episodeId,
+      datasetId,
+      name: episodeName,
+      description: description || '',
+      frameCount: 0,
+      duration: 0,
+      fps: 30,
+      robot: 'RoboForce Titan',
+      sensors: [],
+      h5Path: videoPath, // store video path in h5_path field
+    });
+
+    // 3. Create order
+    const orderId = `order_${Date.now()}`;
+    const now = new Date().toISOString();
+    Orders.insert({
+      id: orderId,
+      title: orderTitle || `RoboForce VQA - ${episodeName}`,
+      description: `Auto-generated order for ${datasetName}`,
+      clientId: req.user.userId,
+      datasetId,
+      taskType: 'vqa',
+      taskCount: 1,
+      status: 'pending',
+      priority: 'normal',
+      deadline: null,
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    // 4. Create task
+    const taskId = `task_${Date.now()}`;
+    Tasks.insert({
+      id: taskId,
+      title: `VQA: ${episodeName}`,
+      description: `Auto-generated VQA task for ${episodeName}`,
+      type: 'vqa',
+      status: 'pending',
+      priority: 'normal',
+      datasetId,
+      episodeIds: JSON.stringify([episodeId]),
+      assignedTo: null,
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    auditLog.write({
+      event: 'ROBOFORCE_UPLOAD',
+      userId: req.user.userId,
+      action: 'create',
+      resource: `order:${orderId}`,
+      details: { datasetId, episodeId, videoPath },
+      result: 'success',
+    });
+
+    res.json({
+      success: true,
+      datasetId,
+      episodeId,
+      orderId,
+      taskId,
+      videoPath,
+    });
+  } catch (err) {
+    console.error('RoboForce upload error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ========== BATCH OPERATIONS API ==========
 
 // In-memory batch jobs

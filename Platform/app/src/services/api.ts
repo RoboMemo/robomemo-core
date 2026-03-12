@@ -274,6 +274,22 @@ class ApiService {
     });
   }
 
+  async uploadRoboForceVideo(formData: FormData): Promise<any> {
+    const token = this.getToken();
+    const response = await fetch(`${this.baseUrl}/api/roboforce/upload`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+      },
+      body: formData, // FormData handles Content-Type automatically
+    });
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Upload failed');
+    }
+    return response.json();
+  }
+
   // ========== GDPR Compliance ==========
 
   async gdprAccessRequest(subjectId: string): Promise<any> {

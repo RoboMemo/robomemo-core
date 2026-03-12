@@ -23,6 +23,15 @@ export default function RoboForceIntegration() {
   const [validateResult, setValidateResult] = useState<any>(null);
   const [processing, setProcessing] = useState(false);
 
+  // Upload state
+  const [uploadFile, setUploadFile] = useState<File | null>(null);
+  const [uploadDatasetName, setUploadDatasetName] = useState('');
+  const [uploadEpisodeName, setUploadEpisodeName] = useState('');
+  const [uploadDescription, setUploadDescription] = useState('');
+  const [uploadOrderTitle, setUploadOrderTitle] = useState('');
+  const [uploadResult, setUploadResult] = useState<any>(null);
+  const [uploading, setUploading] = useState(false);
+
   useEffect(() => {
     loadPresets();
   }, []);
@@ -74,6 +83,28 @@ export default function RoboForceIntegration() {
     setImportName('RoboForce Titan Screw Driving');
   };
 
+  const handleUpload = async () => {
+    if (!uploadFile || !uploadDatasetName || !uploadEpisodeName) return;
+    setUploading(true);
+    setUploadResult(null);
+    try {
+      const formData = new FormData();
+      formData.append('video', uploadFile);
+      formData.append('datasetName', uploadDatasetName);
+      formData.append('episodeName', uploadEpisodeName);
+      formData.append('description', uploadDescription);
+      formData.append('orderTitle', uploadOrderTitle || `VQA - ${uploadEpisodeName}`);
+      formData.append('preset', 'titan_standard');
+
+      const result = await api.uploadRoboForceVideo(formData);
+      setUploadResult(result);
+    } catch (err: any) {
+      setUploadResult({ error: err.message });
+    } finally {
+      setUploading(false);
+    }
+  };
+
   if (loading) return <div className="text-center py-12 text-muted-foreground">Loading...</div>;
 
   return (
@@ -116,11 +147,90 @@ export default function RoboForceIntegration() {
         </CardContent>
       </Card>
 
-      <Tabs defaultValue="import">
+      <Tabs defaultValue="upload">
         <TabsList>
-          <TabsTrigger value="import">Import</TabsTrigger>
+          <TabsTrigger value="upload">Upload Video</TabsTrigger>
+          <TabsTrigger value="import">Import JSON</TabsTrigger>
           <TabsTrigger value="validate">Validate</TabsTrigger>
         </TabsList>
+
+        <TabsContent value="upload">
+          <Card>
+            <CardHeader>
+              <CardTitle>Upload RoboForce Video</CardTitle>
+              <CardDescription>Upload video file and auto-create order + VQA task</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div>
+                <Label>Video File</Label>
+                <Input
+                  type="file"
+                  accept="video/*"
+                  onChange={(e) => setUploadFile(e.target.files?.[0] || null)}
+                />
+              </div>
+              <div>
+                <Label>Dataset Name</Label>
+                <Input
+                  placeholder="RoboForce Titan Dataset"
+                  value={uploadDatasetName}
+                  onChange={(e) => setUploadDatasetName(e.target.value)}
+                />
+              </div>
+              <div>
+                <Label>Episode Name</Label>
+                <Input
+                  placeholder="screw_drive_01"
+                  value={uploadEpisodeName}
+                  onChange={(e) => setUploadEpisodeName(e.target.value)}
+                />
+              </div>
+              <div>
+                <Label>Description (optional)</Label>
+                <Textarea
+                  placeholder="M4 screw insertion at 5Nm torque"
+                  value={uploadDescription}
+                  onChange={(e) => setUploadDescription(e.target.value)}
+                  rows={2}
+                />
+              </div>
+              <div>
+                <Label>Order Title (optional)</Label>
+                <Input
+                  placeholder="Auto-generated if empty"
+                  value={uploadOrderTitle}
+                  onChange={(e) => setUploadOrderTitle(e.target.value)}
+                />
+              </div>
+              <Button
+                onClick={handleUpload}
+                disabled={uploading || !uploadFile || !uploadDatasetName || !uploadEpisodeName}
+              >
+                <Upload className="w-4 h-4 mr-2" />
+                {uploading ? 'Uploading...' : 'Upload & Create Order'}
+              </Button>
+              {uploadResult && (
+                <div
+                  className={`p-3 rounded-lg text-sm ${
+                    uploadResult.error ? 'bg-red-50 text-red-700' : 'bg-green-50 text-green-700'
+                  }`}
+                >
+                  {uploadResult.error ? (
+                    `Error: ${uploadResult.error}`
+                  ) : (
+                    <div className="space-y-1">
+                      <div>✓ Upload successful!</div>
+                      <div className="text-xs">Dataset: {uploadResult.datasetId}</div>
+                      <div className="text-xs">Episode: {uploadResult.episodeId}</div>
+                      <div className="text-xs">Order: {uploadResult.orderId}</div>
+                      <div className="text-xs">Task: {uploadResult.taskId}</div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
 
         <TabsContent value="import">
           <Card>
