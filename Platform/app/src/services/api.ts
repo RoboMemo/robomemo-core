@@ -254,6 +254,26 @@ class ApiService {
     return this.fetch(`/batch/jobs/${jobId}`);
   }
 
+  // ========== RoboForce Integration ==========
+
+  async getRoboForceSensorPresets(): Promise<any[]> {
+    return this.fetch('/roboforce/sensor-presets');
+  }
+
+  async importRoboForceData(params: { datasetName: string; episodes: any[]; preset?: string }): Promise<any> {
+    return this.fetch('/roboforce/import', {
+      method: 'POST',
+      body: JSON.stringify(params),
+    });
+  }
+
+  async validateRoboForceData(params: { data: any; preset?: string }): Promise<any> {
+    return this.fetch('/roboforce/validate', {
+      method: 'POST',
+      body: JSON.stringify(params),
+    });
+  }
+
   // ========== GDPR Compliance ==========
 
   async gdprAccessRequest(subjectId: string): Promise<any> {

@@ -2132,6 +2132,93 @@ app.delete('/api/tasks/:id', authMiddleware, requireRole('platform_admin'), (req
   res.json({ success: true });
 });
 
+// ========== ROBOFORCE INTEGRATION API ==========
+
+// RoboForce Titan sensor presets
+const ROBOFORCE_PRESETS = {
+  titan_standard: {
+    name: 'RoboForce Titan Standard',
+    description: 'Standard Titan configuration with RGB-D cameras and F/T sensors',
+    sensors: [
+      { type: 'rgbd', name: 'RGBD-Front', location: 'end-effector', resolution: '1280x720', fps: 30 },
+      { type: 'rgbd', name: 'RGBD-Left', location: 'left-shoulder', resolution: '1280x720', fps: 30 },
+      { type: 'rgbd', name: 'RGBD-Right', location: 'right-shoulder', resolution: '1280x720', fps: 30 },
+      { type: 'ft_6axis', name: 'FT-Left', location: 'left-wrist', range: '[-300,300]N', resolution: 0.1 },
+      { type: 'ft_6axis', name: 'FT-Right', location: 'right-wrist', range: '[-300,300]N', resolution: 0.1 },
+    ],
+  },
+};
+
+// GET /api/roboforce/sensor-presets
+app.get('/api/roboforce/sensor-presets', authMiddleware, (req, res) => {
+  res.json(Object.values(ROBOFORCE_PRESETS));
+});
+
+// POST /api/roboforce/import — import RoboForce data
+app.post('/api/roboforce/import', authMiddleware, requireRole('platform_admin', 'data_admin'), (req, res) => {
+  const { datasetName, episodes, preset } = req.body;
+  if (!datasetName || !episodes || !Array.isArray(episodes)) {
+    return res.status(400).json({ error: 'datasetName and episodes array required' });
+  }
+
+  const datasetId = `ds_roboforce_${Date.now()}`;
+  const dataset = Datasets.insert({
+    id: datasetId,
+    name: datasetName,
+    description: `RoboForce Titan dataset (${preset || 'custom'})`,
+    format: 'roboforce',
+    robotType: 'RoboForce Titan',
+    sensorConfig: ROBOFORCE_PRESETS[preset] || { sensors: [] },
+    episodeCount: episodes.length,
+  });
+
+  // Import episodes
+  for (const ep of episodes) {
+    Episodes.insert({
+      id: ep.id || `ep_rf_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      datasetId,
+      name: ep.name,
+      description: ep.description,
+      frameCount: ep.frameCount || 0,
+      duration: ep.duration || 0,
+      fps: ep.fps || 30,
+      robot: 'RoboForce Titan',
+      sensors: ep.sensors || [],
+    });
+  }
+
+  auditLog.write({ event: 'ROBOFORCE_IMPORT', userId: req.user.userId, action: 'create', resource: `dataset:${datasetId}`, details: { episodes: episodes.length }, result: 'success' });
+  res.json({ success: true, datasetId, episodeCount: episodes.length });
+});
+
+// POST /api/roboforce/validate — validate RoboForce data format
+app.post('/api/roboforce/validate', authMiddleware, (req, res) => {
+  const { data, preset } = req.body;
+  const presetConfig = ROBOFORCE_PRESETS[preset];
+  const errors = [];
+  const warnings = [];
+
+  if (!data) {
+    errors.push('No data provided');
+  } else {
+    if (!data.episodes || !Array.isArray(data.episodes)) errors.push('Missing episodes array');
+    if (!data.metadata) warnings.push('Missing metadata');
+    if (presetConfig && data.sensors) {
+      const expectedSensors = presetConfig.sensors.map(s => s.type);
+      const actualSensors = data.sensors.map(s => s.type);
+      const missing = expectedSensors.filter(s => !actualSensors.includes(s));
+      if (missing.length > 0) warnings.push(`Missing sensor types: ${missing.join(', ')}`);
+    }
+  }
+
+  res.json({
+    valid: errors.length === 0,
+    errors,
+    warnings,
+    preset: presetConfig ? preset : 'custom',
+  });
+});
+
 // ========== BATCH OPERATIONS API ==========
 
 // In-memory batch jobs
