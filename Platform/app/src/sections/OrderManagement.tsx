@@ -9,7 +9,6 @@ import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import api from '@/services/api';
 import type { Order, OrderStats, OrderStatus, Dataset } from '@/types';
 
@@ -28,7 +27,6 @@ export default function OrderManagement() {
   const [datasets, setDatasets] = useState<Dataset[]>([]);
   const [loading, setLoading] = useState(true);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
-  const [viewMode, setViewMode] = useState<'table' | 'card'>('card');
   const [form, setForm] = useState({
     title: '', description: '', clientName: '', clientContact: '',
     priority: 'normal', datasetId: '', totalEpisodes: 0,

@@ -245,7 +245,7 @@ export default function AutoAnnotation() {
     
     try {
       const episodeIds = episodes.map(e => e.id);
-      await api.batchAutoAnnotate(episodeIds, selectedModel, 'temporal_segmentation');
+      await api.batchAutoAnnotate(episodeIds, selectedModel);
       
       // Simulate progress
       const interval = setInterval(() => {
@@ -424,30 +424,25 @@ export default function AutoAnnotation() {
                       {rgbdSensors.length > 0 && (
                         <div>
                           <h4 className="text-sm font-semibold mb-2 flex items-center gap-1.5">
-                            📷 Camera Views ({rgbdSensors.length}x RGBD)
+                            📷 Camera Views ({rgbdSensors.length}x)
                           </h4>
-                          <div className="grid gap-2" style={{ gridTemplateColumns: `repeat(${Math.min(rgbdSensors.length, 3)}, 1fr)` }}>
+                          <div className="grid gap-2" style={{ gridTemplateColumns: `repeat(${Math.min(rgbdSensors.length, 2)}, 1fr)` }}>
                             {rgbdSensors.map((sensor: any, i: number) => (
                               <div key={i} className="rounded-lg border overflow-hidden">
-                                <div className="aspect-video bg-gradient-to-br from-slate-800 to-slate-900 flex items-center justify-center relative">
-                                  {/* Simulated RGBD view */}
-                                  <div className="text-center">
-                                    <div className="text-2xl mb-1">
-                                      {sensor.location === 'chest' || sensor.mount === 'chest' ? '🎥' : 
-                                       sensor.location?.includes('left') || sensor.mount?.includes('left') ? '🤛' : '🤜'}
-                                    </div>
-                                    <div className="text-xs text-slate-400">{sensor.name}</div>
-                                    <div className="text-[10px] text-slate-500 mt-0.5">640×480 RGB-D</div>
-                                  </div>
-                                  {/* RGB/Depth toggle indicators */}
-                                  <div className="absolute top-1 right-1 flex gap-0.5">
-                                    <span className="text-[9px] px-1 py-0.5 rounded bg-green-500/20 text-green-400 border border-green-500/30">RGB</span>
-                                    <span className="text-[9px] px-1 py-0.5 rounded bg-blue-500/20 text-blue-400 border border-blue-500/30">Depth</span>
-                                  </div>
-                                </div>
+                                <video
+                                  ref={i === 0 ? videoRef : undefined}
+                                  className="w-full aspect-video bg-black"
+                                  controls
+                                  autoPlay
+                                  muted
+                                  loop
+                                >
+                                  <source src={`/api/episodes/${selectedEpisode}/video`} type="video/mp4" />
+                                  Your browser does not support the video tag.
+                                </video>
                                 <div className="px-2 py-1.5 bg-muted/50 text-xs">
-                                  <span className="font-medium">{sensor.name}</span>
-                                  <span className="text-muted-foreground ml-1">@ {sensor.location || sensor.mount}</span>
+                                  <span className="font-medium">{sensor.name || 'Camera'}</span>
+                                  <span className="text-muted-foreground ml-1">@ {sensor.location || sensor.mount || 'unknown'}</span>
                                 </div>
                               </div>
                             ))}

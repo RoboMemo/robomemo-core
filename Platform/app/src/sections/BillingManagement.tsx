@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { DollarSign, TrendingUp, AlertCircle, Plus, Edit2, Trash2 } from 'lucide-react';
+import { DollarSign, TrendingUp, Edit2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
@@ -56,9 +56,9 @@ export default function BillingManagement() {
     try {
       setLoading(true);
       const [ratesData, recordsData, summaryData] = await Promise.all([
-        api.fetch('/billing/rates'),
-        api.fetch('/billing'),
-        api.fetch('/billing/summary'),
+        api.fetch<BillingRate[]>('/billing/rates'),
+        api.fetch<BillingRecord[]>('/billing'),
+        api.fetch<BillingSummary>('/billing/summary'),
       ]);
       setRates(ratesData);
       setRecords(recordsData);

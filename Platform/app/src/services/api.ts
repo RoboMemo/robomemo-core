@@ -556,13 +556,6 @@ class ApiService {
     });
   }
 
-  async batchAutoAnnotate(episodeIds: string[], modelId: string, annotationType: string, options?: any): Promise<any> {
-    return this.fetch('/autoannotation/batch', {
-      method: 'POST',
-      body: JSON.stringify({ episodeIds, modelId, annotationType, options }),
-    });
-  }
-
   async getAutoAnnotationJobStatus(jobId: string): Promise<any> {
     return this.fetch(`/autoannotation/jobs/${jobId}`);
   }

@@ -2573,3 +2573,77 @@ app.delete('/api/billing/:id', authMiddleware, requireRole('platform_admin'), (r
 app.get('/api/billing/summary', authMiddleware, requireRole('platform_admin', 'data_admin'), (req, res) => {
   res.json(Billing.getSummary());
 });
+
+// ========== VIDEO STREAMING API ==========
+
+// GET /api/episodes/:episodeId/video — stream episode video
+app.get('/api/episodes/:episodeId/video', (req, res) => {
+  try {
+    const episode = Episodes.getById(req.params.episodeId);
+    if (!episode) return res.status(404).json({ error: 'Episode not found' });
+    
+    const videoPath = episode.h5_path || episode.videos?.[0];
+    if (!videoPath) return res.status(404).json({ error: 'No video found for this episode' });
+    
+    const fullPath = path.join(BASE_DIR, videoPath);
+    if (!fs.existsSync(fullPath)) {
+      console.warn(`Video not found: ${fullPath}`);
+      return res.status(404).json({ error: 'Video file not found on disk' });
+    }
+    
+    const stat = fs.statSync(fullPath);
+    const fileSize = stat.size;
+    const range = req.headers.range;
+    
+    if (range) {
+      const parts = range.replace(/bytes=/, '').split('-');
+      const start = parseInt(parts[0], 10);
+      const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+      const chunksize = end - start + 1;
+      
+      res.writeHead(206, {
+        'Content-Range': `bytes ${start}-${end}/${fileSize}`,
+        'Accept-Ranges': 'bytes',
+        'Content-Length': chunksize,
+        'Content-Type': 'video/mp4',
+      });
+      fs.createReadStream(fullPath, { start, end }).pipe(res);
+    } else {
+      res.writeHead(200, {
+        'Content-Length': fileSize,
+        'Content-Type': 'video/mp4',
+      });
+      fs.createReadStream(fullPath).pipe(res);
+    }
+  } catch (error) {
+    console.error('Video streaming error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET /api/episodes/:episodeId/frame — extract single frame
+app.get('/api/episodes/:episodeId/frame', (req, res) => {
+  try {
+    const { frameIndex = 0 } = req.query;
+    const episode = Episodes.getById(req.params.episodeId);
+    if (!episode) return res.status(404).json({ error: 'Episode not found' });
+    
+    const videoPath = episode.h5_path || episode.videos?.[0];
+    if (!videoPath) return res.status(404).json({ error: 'No video found' });
+    
+    const fullPath = path.join(BASE_DIR, videoPath);
+    if (!fs.existsSync(fullPath)) return res.status(404).json({ error: 'Video file not found' });
+    
+    // Mock frame extraction — in production use ffmpeg or opencv
+    res.json({
+      episodeId: req.params.episodeId,
+      frameIndex: parseInt(String(frameIndex)),
+      width: 640,
+      height: 480,
+      timestamp: (parseInt(String(frameIndex)) / (episode.fps || 30)).toFixed(2),
+      dataUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
