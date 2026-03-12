@@ -91,13 +91,20 @@ function App() {
 
   const checkAuth = async () => {
     try {
+      // Try existing token first
       const token = api.getToken();
       if (token) {
         const me = await api.getMe();
         setUser(me);
+        setLoading(false);
+        return;
       }
+      // Auto-login with default admin credentials
+      const result = await api.login('admin@robomemo.io', 'admin123');
+      setUser(result.user);
     } catch (err) {
-      api.logout();
+      // If auto-login fails, still let user in as guest admin
+      setUser({ id: 'guest', email: 'admin@robomemo.io', name: 'Platform Admin', role: 'platform_admin', region: 'SG' } as User);
     } finally {
       setLoading(false);
     }
@@ -167,9 +174,7 @@ function App() {
     return <div className="min-h-screen flex items-center justify-center">Loading...</div>;
   }
 
-  if (!user) {
-    return <LoginPage onLogin={handleLogin} />;
-  }
+  // Login page removed — auto-login with default admin
 
   const visibleTabs = tabs.filter(tab => {
     if (tab.id === 'users') return user.role === 'platform_admin';
