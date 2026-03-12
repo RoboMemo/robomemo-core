@@ -9,6 +9,7 @@ __pycache__/
 *.egg-info/
 dist/
 *.dist-info/
+.pytest_cache/
 
 # ──── Node ────────────────────────────────────────────────────────────────────
 node_modules/
@@ -38,9 +39,16 @@ Platform/backend/data/datasets/
 Platform/backend/uploads/
 Platform/backend/das-datakit/
 
+# ──── Retarget Demo ──────────────────────────────────────────────────────────
+cross_embodiment_retarget_demo/checkpoints/
+cross_embodiment_retarget_demo/logs/
+*.onnx
+
 # ──── OS ──────────────────────────────────────────────────────────────────────
 .DS_Store
 Thumbs.db
+*.swp
+*~
 
 # ──── IDE ─────────────────────────────────────────────────────────────────────
 .vscode/settings.json
