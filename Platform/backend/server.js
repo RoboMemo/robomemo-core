@@ -982,6 +982,63 @@ app.get('/api/vlm/local-models', async (req, res) => {
   }
 });
 
+// 统一的 VLM 模型列表（用于 Auto-Annotation）
+app.get('/api/vlm/models', async (req, res) => {
+  const models = [
+    {
+      id: 'gemini-2.5-pro',
+      name: 'Google Gemini 2.5 Pro',
+      provider: 'gemini',
+      description: '最新 Gemini 2.5 Pro，支持深度思考模式',
+      capabilities: ['video', 'temporal', 'spatial', 'reasoning'],
+      maxVideoLength: 3600,
+      languageSupport: ['en', 'zh', 'ja', 'ko']
+    },
+    {
+      id: 'claude-3-5-sonnet',
+      name: 'Claude 3.5 Sonnet',
+      provider: 'claude',
+      description: '强推理能力，擅长结构化输出',
+      capabilities: ['video', 'temporal', 'spatial', 'reasoning'],
+      maxVideoLength: 1800,
+      languageSupport: ['en', 'zh', 'ja', 'ko']
+    },
+    {
+      id: 'gpt-4o',
+      name: 'GPT-4o',
+      provider: 'openai',
+      description: '高质量多模态模型',
+      capabilities: ['video', 'temporal', 'spatial', 'reasoning'],
+      maxVideoLength: 1800,
+      languageSupport: ['en', 'zh', 'ja', 'ko']
+    }
+  ];
+
+  // 添加本地 Ollama 模型
+  try {
+    const OLLAMA_URL = 'http://localhost:11434';
+    const response = await fetch(`${OLLAMA_URL}/api/tags`);
+    const data = await response.json();
+    const VISION_TAGS = ['llava', 'llama3.2-vision', 'minicpm-v', 'bakllava', 'moondream', 'minicpm'];
+    const all = data.models || [];
+    const vision = all.filter(m => VISION_TAGS.some(t => m.name.toLowerCase().includes(t)));
+    const ollamaModels = vision.map(m => ({
+      id: `ollama-${m.name}`,
+      name: `Ollama: ${m.name}`,
+      provider: 'ollama',
+      description: '本地运行，完全免费',
+      capabilities: ['video', 'temporal', 'spatial'],
+      maxVideoLength: 600,
+      languageSupport: ['en', 'zh']
+    }));
+    models.push(...ollamaModels);
+  } catch (err) {
+    // Ollama 未运行，跳过
+  }
+
+  res.json(models);
+});
+
 // ========== END STRUCTURED VQA ANALYSIS API ==========
 
 // ─── DB management endpoints ──────────────────────────────────────────────────

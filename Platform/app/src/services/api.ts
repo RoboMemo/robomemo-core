@@ -525,7 +525,7 @@ class ApiService {
 
   // Auto-Annotation (VLM-based)
   async getAutoAnnotationModels(): Promise<any[]> {
-    return this.fetch('/autoannotation/models');
+    return this.fetch('/vlm/models');
   }
 
   async segmentVideo(videoPath: string, modelId: string, options?: any): Promise<any> {
