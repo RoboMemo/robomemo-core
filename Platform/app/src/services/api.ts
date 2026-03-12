@@ -30,7 +30,7 @@ class ApiService {
     return this.token;
   }
 
-  private async fetch<T>(endpoint: string, options?: RequestInit): Promise<T> {
+  async fetch<T>(endpoint: string, options?: RequestInit): Promise<T> {
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
     };

@@ -70,7 +70,7 @@ const upload = multer({ storage });
 
 // Data management — SQLite via db.js
 const DATA_DIR = path.join(__dirname, 'data'); // kept for GenRobot static files
-const { db, Datasets, Episodes, Annotations, Collections, Lineage, Tasks, Reviews, Orders, syncFromJSON, getStats, getFullStats, getDatasetStats, getAnnotationStats, getTimeline } = require('./db');
+const { db, Datasets, Episodes, Annotations, Collections, Lineage, Tasks, Reviews, Orders, Billing, syncFromJSON, getStats, getFullStats, getDatasetStats, getAnnotationStats, getTimeline } = require('./db');
 
 // Initialize auth & audit on the shared DB instance
 initAuth(db);
@@ -2501,4 +2501,75 @@ app.get('/api/datasets/genrobot/sample/:sampleId', (req, res) => {
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
+});
+
+// ========== BILLING & COST TRACKING API ==========
+
+// GET /api/billing/rates — get all billing rates
+app.get('/api/billing/rates', authMiddleware, requireRole('platform_admin', 'data_admin'), (req, res) => {
+  res.json(Billing.getRates());
+});
+
+// PUT /api/billing/rates/:type — update billing rate
+app.put('/api/billing/rates/:type', authMiddleware, requireRole('platform_admin'), (req, res) => {
+  const { rate, description } = req.body;
+  if (rate === undefined) return res.status(400).json({ error: 'rate required' });
+  Billing.updateRate(req.params.type, rate, description);
+  auditLog.write({ event: 'BILLING_RATE_UPDATE', userId: req.user.userId, action: 'update', resource: `rate:${req.params.type}`, details: { rate }, result: 'success' });
+  res.json({ success: true, type: req.params.type, rate });
+});
+
+// POST /api/billing/calculate — calculate cost for task
+app.post('/api/billing/calculate', authMiddleware, (req, res) => {
+  const { type, episodesCount } = req.body;
+  if (!type || !episodesCount) return res.status(400).json({ error: 'type and episodesCount required' });
+  const result = Billing.calculate(type, episodesCount);
+  if (result.error) return res.status(400).json(result);
+  res.json(result);
+});
+
+// POST /api/billing — create billing record
+app.post('/api/billing', authMiddleware, requireRole('platform_admin', 'data_admin'), (req, res) => {
+  const billing = Billing.insert(req.body);
+  auditLog.write({ event: 'BILLING_CREATE', userId: req.user.userId, action: 'create', resource: `billing:${billing.id}`, result: 'success' });
+  res.status(201).json(billing);
+});
+
+// GET /api/billing — all billing records
+app.get('/api/billing', authMiddleware, requireRole('platform_admin', 'data_admin'), (req, res) => {
+  res.json(Billing.getAll());
+});
+
+// GET /api/billing/:id — billing detail
+app.get('/api/billing/:id', authMiddleware, (req, res) => {
+  const billing = Billing.getById(req.params.id);
+  if (!billing) return res.status(404).json({ error: 'Billing record not found' });
+  res.json(billing);
+});
+
+// GET /api/billing/order/:orderId — billing for order
+app.get('/api/billing/order/:orderId', authMiddleware, (req, res) => {
+  res.json(Billing.getByOrder(req.params.orderId));
+});
+
+// PUT /api/billing/:id — update billing record
+app.put('/api/billing/:id', authMiddleware, requireRole('platform_admin', 'data_admin'), (req, res) => {
+  const billing = Billing.update(req.params.id, req.body);
+  if (!billing) return res.status(404).json({ error: 'Billing record not found' });
+  auditLog.write({ event: 'BILLING_UPDATE', userId: req.user.userId, action: 'update', resource: `billing:${req.params.id}`, result: 'success' });
+  res.json(billing);
+});
+
+// DELETE /api/billing/:id — delete billing record
+app.delete('/api/billing/:id', authMiddleware, requireRole('platform_admin'), (req, res) => {
+  const existing = Billing.getById(req.params.id);
+  if (!existing) return res.status(404).json({ error: 'Billing record not found' });
+  Billing.delete(req.params.id);
+  auditLog.write({ event: 'BILLING_DELETE', userId: req.user.userId, action: 'delete', resource: `billing:${req.params.id}`, result: 'success' });
+  res.json({ success: true });
+});
+
+// GET /api/billing/summary — billing summary
+app.get('/api/billing/summary', authMiddleware, requireRole('platform_admin', 'data_admin'), (req, res) => {
+  res.json(Billing.getSummary());
 });

@@ -20,7 +20,8 @@ import {
   ShieldCheck,
   Package,
   Zap,
-  Bot
+  Bot,
+  DollarSign
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Sheet, SheetContent, SheetTrigger } from '@/components/ui/sheet';
@@ -45,11 +46,11 @@ import QualityControl from '@/sections/QualityControl';
 import OrderManagement from '@/sections/OrderManagement';
 import BatchOperations from '@/sections/BatchOperations';
 import RoboForceIntegration from '@/sections/RoboForceIntegration';
-import api from '@/services/api';
+import BillingManagement from '@/sections/BillingManagement';import api from '@/services/api';
 import type { User } from '@/types';
 import './App.css';
 
-type Tab = 'datasets' | 'collection' | 'annotation' | 'visualization' | 'simulators' | 'augmentation' | 'autoannotation' | 'structuredvqa' | 'stats' | 'genrobot' | 'users' | 'mytasks' | 'tasks' | 'quality' | 'orders' | 'batch' | 'roboforce';
+type Tab = 'datasets' | 'collection' | 'annotation' | 'visualization' | 'simulators' | 'augmentation' | 'autoannotation' | 'structuredvqa' | 'stats' | 'genrobot' | 'users' | 'mytasks' | 'tasks' | 'quality' | 'orders' | 'batch' | 'roboforce' | 'billing';
 
 const tabs = [
   { id: 'datasets' as Tab, label: 'Datasets', icon: Database },
@@ -68,7 +69,7 @@ const tabs = [
   { id: 'orders' as Tab, label: 'Orders', icon: Package },
   { id: 'batch' as Tab, label: 'Batch Ops', icon: Zap },
   { id: 'roboforce' as Tab, label: 'RoboForce', icon: Bot },
-  { id: 'users' as Tab, label: 'Users', icon: Users },
+  { id: 'billing' as Tab, label: 'Billing', icon: DollarSign },  { id: 'users' as Tab, label: 'Users', icon: Users },
 ];
 
 function App() {
@@ -157,7 +158,8 @@ function App() {
       case 'batch':
         return user?.role === 'platform_admin' || user?.role === 'data_admin' ? <BatchOperations /> : <div className="text-center py-12 text-muted-foreground">Access denied</div>;
       case 'roboforce':
-        return user?.role === 'platform_admin' || user?.role === 'data_admin' ? <RoboForceIntegration /> : <div className="text-center py-12 text-muted-foreground">Access denied</div>;
+      case 'billing':
+        return <BillingManagement />;        return user?.role === 'platform_admin' || user?.role === 'data_admin' ? <RoboForceIntegration /> : <div className="text-center py-12 text-muted-foreground">Access denied</div>;
       case 'users':
         return user?.role === 'platform_admin' ? <UserManagement /> : <div className="text-center py-12 text-muted-foreground">Access denied</div>;
       default:
@@ -180,7 +182,7 @@ function App() {
     if (tab.id === 'orders') return user.role === 'platform_admin' || user.role === 'data_admin';
     if (tab.id === 'batch') return user.role === 'platform_admin' || user.role === 'data_admin';
     if (tab.id === 'roboforce') return user.role === 'platform_admin' || user.role === 'data_admin';
-    return true;
+    if (tab.id === 'billing') return user.role === 'platform_admin' || user.role === 'data_admin';    return true;
   });
 
   return (

@@ -860,7 +860,142 @@ const Orders = {
   },
 };
 
+// ─── Billing ──────────────────────────────────────────────────────────────────
+db.exec(`
+  CREATE TABLE IF NOT EXISTS billing (
+    id              TEXT PRIMARY KEY,
+    order_id        TEXT,
+    type            TEXT NOT NULL DEFAULT 'annotation',
+    amount          REAL NOT NULL DEFAULT 0,
+    currency        TEXT DEFAULT 'USD',
+    rate_per_episode REAL DEFAULT 0,
+    episodes_count  INTEGER DEFAULT 0,
+    status          TEXT NOT NULL DEFAULT 'pending',
+    note            TEXT,
+    created_at      TEXT,
+    updated_at      TEXT
+  );
+  CREATE INDEX IF NOT EXISTS idx_billing_order  ON billing(order_id);
+  CREATE INDEX IF NOT EXISTS idx_billing_status ON billing(status);
+`);
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS billing_rates (
+    id          TEXT PRIMARY KEY,
+    type        TEXT NOT NULL UNIQUE,
+    rate        REAL NOT NULL,
+    currency    TEXT DEFAULT 'USD',
+    unit        TEXT DEFAULT 'per_episode',
+    description TEXT,
+    updated_at  TEXT
+  );
+`);
+
+// Seed default rates
+const rateCount = db.prepare('SELECT COUNT(*) as n FROM billing_rates').get().n;
+if (rateCount === 0) {
+  const now = new Date().toISOString();
+  const seedRates = db.prepare(`INSERT OR IGNORE INTO billing_rates (id, type, rate, currency, unit, description, updated_at) VALUES (?,?,?,?,?,?,?)`);
+  seedRates.run('rate_annotation', 'annotation', 2.50, 'USD', 'per_episode', 'Manual annotation per episode', now);
+  seedRates.run('rate_review', 'review', 1.00, 'USD', 'per_episode', 'Quality review per episode', now);
+  seedRates.run('rate_vqa', 'vqa', 5.00, 'USD', 'per_episode', 'Structured VQA analysis per episode', now);
+  seedRates.run('rate_auto', 'auto_annotation', 0.50, 'USD', 'per_episode', 'Automated VLM annotation per episode', now);
+  console.log('[DB] Default billing rates seeded');
+}
+
+const BILLING_RENAME = {
+  order_id:        'orderId',
+  rate_per_episode:'ratePerEpisode',
+  episodes_count:  'episodesCount',
+  created_at:      'createdAt',
+  updated_at:      'updatedAt',
+};
+
+function parseBillingRow(row) {
+  if (!row) return null;
+  const out = {};
+  for (const [k, v] of Object.entries(row)) {
+    out[BILLING_RENAME[k] ?? k] = v;
+  }
+  return out;
+}
+
+const Billing = {
+  getAll: () =>
+    db.prepare('SELECT * FROM billing ORDER BY created_at DESC').all().map(parseBillingRow),
+
+  getById: (id) =>
+    parseBillingRow(db.prepare('SELECT * FROM billing WHERE id = ?').get(id)),
+
+  getByOrder: (orderId) =>
+    db.prepare('SELECT * FROM billing WHERE order_id = ? ORDER BY created_at DESC')
+      .all(orderId).map(parseBillingRow),
+
+  insert: (b) => {
+    const id = b.id || `bill_${Date.now()}_${require('crypto').randomBytes(3).toString('hex')}`;
+    const now = new Date().toISOString();
+    db.prepare(`
+      INSERT OR REPLACE INTO billing
+        (id, order_id, type, amount, currency, rate_per_episode,
+         episodes_count, status, note, created_at, updated_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?)
+    `).run(id, b.orderId || null, b.type || 'annotation',
+      b.amount || 0, b.currency || 'USD', b.ratePerEpisode || 0,
+      b.episodesCount || 0, b.status || 'pending',
+      b.note || null, b.createdAt || now, now);
+    return Billing.getById(id);
+  },
+
+  update: (id, updates) => {
+    const existing = Billing.getById(id);
+    if (!existing) return null;
+    const merged = { ...existing, ...updates, updatedAt: new Date().toISOString() };
+    return Billing.insert({ ...merged, id });
+  },
+
+  delete: (id) => {
+    db.prepare('DELETE FROM billing WHERE id = ?').run(id);
+  },
+
+  getRates: () =>
+    db.prepare('SELECT * FROM billing_rates ORDER BY type').all().map(r => ({
+      id: r.id, type: r.type, rate: r.rate, currency: r.currency,
+      unit: r.unit, description: r.description, updatedAt: r.updated_at,
+    })),
+
+  updateRate: (type, rate, description) => {
+    const now = new Date().toISOString();
+    db.prepare('UPDATE billing_rates SET rate = ?, description = COALESCE(?, description), updated_at = ? WHERE type = ?')
+      .run(rate, description || null, now, type);
+    return db.prepare('SELECT * FROM billing_rates WHERE type = ?').get(type);
+  },
+
+  calculate: (type, episodesCount) => {
+    const rateRow = db.prepare('SELECT * FROM billing_rates WHERE type = ?').get(type);
+    if (!rateRow) return { error: 'Unknown billing type' };
+    return {
+      type, rate: rateRow.rate, currency: rateRow.currency,
+      unit: rateRow.unit, episodesCount,
+      totalAmount: Math.round(rateRow.rate * episodesCount * 100) / 100,
+    };
+  },
+
+  getSummary: () => {
+    const total = db.prepare('SELECT COUNT(*) as n FROM billing').get().n;
+    const totalAmount = db.prepare('SELECT COALESCE(SUM(amount),0) as s FROM billing').get().s;
+    const byStatus = db.prepare('SELECT status, COUNT(*) as count, COALESCE(SUM(amount),0) as total FROM billing GROUP BY status').all();
+    const byType = db.prepare('SELECT type, COUNT(*) as count, COALESCE(SUM(amount),0) as total FROM billing GROUP BY type').all();
+    const pendingAmount = db.prepare("SELECT COALESCE(SUM(amount),0) as s FROM billing WHERE status = 'pending'").get().s;
+    const paidAmount = db.prepare("SELECT COALESCE(SUM(amount),0) as s FROM billing WHERE status = 'paid'").get().s;
+    return {
+      total, totalAmount, pendingAmount, paidAmount,
+      byStatus: byStatus.map(r => ({ status: r.status, count: r.count, total: r.total })),
+      byType: byType.map(r => ({ type: r.type, count: r.count, total: r.total })),
+    };
+  },
+};
+
 module.exports = {
-  db, Datasets, Episodes, Annotations, Collections, Lineage, Tasks, Reviews, Orders,
+  db, Datasets, Episodes, Annotations, Collections, Lineage, Tasks, Reviews, Orders, Billing,
   syncFromJSON, getStats, getFullStats, getDatasetStats, getAnnotationStats, getTimeline
 };
