@@ -70,7 +70,7 @@ const upload = multer({ storage });
 
 // Data management — SQLite via db.js
 const DATA_DIR = path.join(__dirname, 'data'); // kept for GenRobot static files
-const { db, Datasets, Episodes, Annotations, Collections, Lineage, syncFromJSON, getStats, getFullStats, getDatasetStats, getAnnotationStats, getTimeline } = require('./db');
+const { db, Datasets, Episodes, Annotations, Collections, Lineage, Tasks, syncFromJSON, getStats, getFullStats, getDatasetStats, getAnnotationStats, getTimeline } = require('./db');
 
 // Initialize auth & audit on the shared DB instance
 initAuth(db);
@@ -2056,6 +2056,80 @@ app.post('/api/autoannotation/compare', async (req, res) => {
 app.listen(port, () => {
   console.log(`Backend server running at http://localhost:${port}`);
   console.log('[DB] SQLite ready —', require('./db').getStats());
+});
+
+// ========== TASK MANAGEMENT API ==========
+
+// GET /api/tasks/stats — must be before :id route
+app.get('/api/tasks/stats', authMiddleware, requireRole('platform_admin', 'reviewer', 'data_admin'), (req, res) => {
+  const all = Tasks.getAll();
+  const byStatus = {};
+  const byType = {};
+  const byPriority = {};
+  const byAssignee = {};
+  for (const t of all) {
+    byStatus[t.status] = (byStatus[t.status] || 0) + 1;
+    byType[t.type] = (byType[t.type] || 0) + 1;
+    byPriority[t.priority] = (byPriority[t.priority] || 0) + 1;
+    if (t.assignedTo) byAssignee[t.assignedTo] = (byAssignee[t.assignedTo] || 0) + 1;
+  }
+  res.json({ total: all.length, byStatus, byType, byPriority, byAssignee });
+});
+
+// GET /api/tasks/my — current user's tasks
+app.get('/api/tasks/my', authMiddleware, (req, res) => {
+  res.json(Tasks.getByUser(req.user.userId));
+});
+
+// POST /api/tasks — create task (admin/reviewer)
+app.post('/api/tasks', authMiddleware, requireRole('platform_admin', 'reviewer', 'data_admin'), (req, res) => {
+  const task = Tasks.insert({ ...req.body, assignedBy: req.user.userId });
+  auditLog.write({ event: 'TASK_CREATE', userId: req.user.userId, action: 'create', resource: `task:${task.id}`, result: 'success' });
+  res.status(201).json(task);
+});
+
+// GET /api/tasks — all tasks (admin/reviewer)
+app.get('/api/tasks', authMiddleware, requireRole('platform_admin', 'reviewer', 'data_admin'), (req, res) => {
+  const { status } = req.query;
+  if (status) return res.json(Tasks.getByStatus(status));
+  res.json(Tasks.getAll());
+});
+
+// GET /api/tasks/:id — task detail
+app.get('/api/tasks/:id', authMiddleware, (req, res) => {
+  const task = Tasks.getById(req.params.id);
+  if (!task) return res.status(404).json({ error: 'Task not found' });
+  res.json(task);
+});
+
+// PUT /api/tasks/:id — update task
+app.put('/api/tasks/:id', authMiddleware, (req, res) => {
+  const task = Tasks.update(req.params.id, req.body);
+  if (!task) return res.status(404).json({ error: 'Task not found' });
+  auditLog.write({ event: 'TASK_UPDATE', userId: req.user.userId, action: 'update', resource: `task:${req.params.id}`, result: 'success' });
+  res.json(task);
+});
+
+// PUT /api/tasks/:id/status — update task status
+app.put('/api/tasks/:id/status', authMiddleware, (req, res) => {
+  const { status } = req.body;
+  if (!status) return res.status(400).json({ error: 'status required' });
+  const updates = { status };
+  if (status === 'in_progress') updates.startedAt = new Date().toISOString();
+  if (status === 'completed') updates.completedAt = new Date().toISOString();
+  const task = Tasks.update(req.params.id, updates);
+  if (!task) return res.status(404).json({ error: 'Task not found' });
+  auditLog.write({ event: 'TASK_STATUS', userId: req.user.userId, action: 'update', resource: `task:${req.params.id}`, details: { status }, result: 'success' });
+  res.json(task);
+});
+
+// DELETE /api/tasks/:id — delete task (admin)
+app.delete('/api/tasks/:id', authMiddleware, requireRole('platform_admin'), (req, res) => {
+  const existing = Tasks.getById(req.params.id);
+  if (!existing) return res.status(404).json({ error: 'Task not found' });
+  Tasks.delete(req.params.id);
+  auditLog.write({ event: 'TASK_DELETE', userId: req.user.userId, action: 'delete', resource: `task:${req.params.id}`, result: 'success' });
+  res.json({ success: true });
 });
 
 // GenRobot Dataset API

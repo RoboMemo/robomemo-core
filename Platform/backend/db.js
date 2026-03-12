@@ -572,7 +572,119 @@ function getTimeline(days = 30) {
   };
 }
 
+// ─── Tasks ────────────────────────────────────────────────────────────────────
+db.exec(`
+  CREATE TABLE IF NOT EXISTS tasks (
+    id            TEXT PRIMARY KEY,
+    title         TEXT NOT NULL,
+    description   TEXT,
+    type          TEXT NOT NULL DEFAULT 'annotation',
+    status        TEXT NOT NULL DEFAULT 'pending',
+    priority      TEXT DEFAULT 'normal',
+    dataset_id    TEXT,
+    episode_ids   TEXT,
+    assigned_to   TEXT,
+    assigned_by   TEXT,
+    reviewer_id   TEXT,
+    due_date      TEXT,
+    started_at    TEXT,
+    completed_at  TEXT,
+    result        TEXT,
+    created_at    TEXT,
+    updated_at    TEXT
+  );
+  CREATE INDEX IF NOT EXISTS idx_task_assigned ON tasks(assigned_to);
+  CREATE INDEX IF NOT EXISTS idx_task_status   ON tasks(status);
+  CREATE INDEX IF NOT EXISTS idx_task_dataset  ON tasks(dataset_id);
+`);
+
+const TASK_JSON_COLS = new Set(['episode_ids', 'result']);
+const TASK_RENAME = {
+  dataset_id:   'datasetId',
+  episode_ids:  'episodeIds',
+  assigned_to:  'assignedTo',
+  assigned_by:  'assignedBy',
+  reviewer_id:  'reviewerId',
+  due_date:     'dueDate',
+  started_at:   'startedAt',
+  completed_at: 'completedAt',
+  created_at:   'createdAt',
+  updated_at:   'updatedAt',
+};
+
+function parseTaskRow(row) {
+  if (!row) return null;
+  const out = {};
+  for (const [k, v] of Object.entries(row)) {
+    const key = TASK_RENAME[k] ?? k;
+    if (TASK_JSON_COLS.has(k) && typeof v === 'string') {
+      try { out[key] = JSON.parse(v); } catch { out[key] = v; }
+    } else {
+      out[key] = v;
+    }
+  }
+  return out;
+}
+
+const Tasks = {
+  getAll: () =>
+    db.prepare('SELECT * FROM tasks ORDER BY created_at DESC').all().map(parseTaskRow),
+
+  getById: (id) =>
+    parseTaskRow(db.prepare('SELECT * FROM tasks WHERE id = ?').get(id)),
+
+  getByUser: (userId) =>
+    db.prepare('SELECT * FROM tasks WHERE assigned_to = ? ORDER BY created_at DESC')
+      .all(userId).map(parseTaskRow),
+
+  getByStatus: (status) =>
+    db.prepare('SELECT * FROM tasks WHERE status = ? ORDER BY created_at DESC')
+      .all(status).map(parseTaskRow),
+
+  insert: (t) => {
+    const id = t.id || `task_${Date.now()}_${require('crypto').randomBytes(3).toString('hex')}`;
+    const now = new Date().toISOString();
+    db.prepare(`
+      INSERT OR REPLACE INTO tasks
+        (id, title, description, type, status, priority, dataset_id,
+         episode_ids, assigned_to, assigned_by, reviewer_id,
+         due_date, started_at, completed_at, result, created_at, updated_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    `).run(
+      id,
+      t.title,
+      t.description || null,
+      t.type || 'annotation',
+      t.status || 'pending',
+      t.priority || 'normal',
+      t.datasetId || null,
+      JSON.stringify(t.episodeIds || []),
+      t.assignedTo || null,
+      t.assignedBy || null,
+      t.reviewerId || null,
+      t.dueDate || null,
+      t.startedAt || null,
+      t.completedAt || null,
+      t.result ? JSON.stringify(t.result) : null,
+      t.createdAt || now,
+      now
+    );
+    return Tasks.getById(id);
+  },
+
+  update: (id, updates) => {
+    const existing = Tasks.getById(id);
+    if (!existing) return null;
+    const merged = { ...existing, ...updates, updatedAt: new Date().toISOString() };
+    return Tasks.insert({ ...merged, id });
+  },
+
+  delete: (id) => {
+    db.prepare('DELETE FROM tasks WHERE id = ?').run(id);
+  },
+};
+
 module.exports = {
-  db, Datasets, Episodes, Annotations, Collections, Lineage,
+  db, Datasets, Episodes, Annotations, Collections, Lineage, Tasks,
   syncFromJSON, getStats, getFullStats, getDatasetStats, getAnnotationStats, getTimeline
 };

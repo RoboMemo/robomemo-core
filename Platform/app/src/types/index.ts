@@ -18,6 +18,40 @@ export interface AuthResponse {
   user: User;
 }
 
+// ========== Task Types ==========
+
+export type TaskType = 'annotation' | 'review' | 'vqa';
+export type TaskStatus = 'pending' | 'assigned' | 'in_progress' | 'completed' | 'rejected';
+export type TaskPriority = 'low' | 'normal' | 'high' | 'urgent';
+
+export interface Task {
+  id: string;
+  title: string;
+  description?: string;
+  type: TaskType;
+  status: TaskStatus;
+  priority: TaskPriority;
+  datasetId?: string;
+  episodeIds?: string[];
+  assignedTo?: string;
+  assignedBy?: string;
+  reviewerId?: string;
+  dueDate?: string;
+  startedAt?: string;
+  completedAt?: string;
+  result?: Record<string, any>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface TaskStats {
+  total: number;
+  byStatus: Record<string, number>;
+  byType: Record<string, number>;
+  byPriority: Record<string, number>;
+  byAssignee: Record<string, number>;
+}
+
 // ========== Audit Log Types ==========
 
 export interface AuditEvent {

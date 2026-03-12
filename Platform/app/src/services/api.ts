@@ -3,7 +3,8 @@ import type {
   Simulator, SensorConfig, AugmentationModel, ExportFormat,
   PlatformStats, TimelineEntry,
   StructuredVQAAnalysis, VQAAnnotationRecord, VLMProvider,
-  TemporalConsistencyCheck
+  TemporalConsistencyCheck,
+  Task, TaskStats
 } from '@/types';
 
 const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:3001/api';
@@ -96,6 +97,50 @@ class ApiService {
 
   async deleteUser(id: string): Promise<void> {
     return this.fetch(`/users/${id}`, { method: 'DELETE' });
+  }
+
+  // ========== Task Management ==========
+
+  async getTasks(status?: string): Promise<Task[]> {
+    if (status) return this.fetch(`/tasks?status=${status}`);
+    return this.fetch('/tasks');
+  }
+
+  async getMyTasks(): Promise<Task[]> {
+    return this.fetch('/tasks/my');
+  }
+
+  async getTask(id: string): Promise<Task> {
+    return this.fetch(`/tasks/${id}`);
+  }
+
+  async createTask(task: Partial<Task>): Promise<Task> {
+    return this.fetch('/tasks', {
+      method: 'POST',
+      body: JSON.stringify(task),
+    });
+  }
+
+  async updateTask(id: string, updates: Partial<Task>): Promise<Task> {
+    return this.fetch(`/tasks/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(updates),
+    });
+  }
+
+  async updateTaskStatus(id: string, status: string): Promise<Task> {
+    return this.fetch(`/tasks/${id}/status`, {
+      method: 'PUT',
+      body: JSON.stringify({ status }),
+    });
+  }
+
+  async deleteTask(id: string): Promise<void> {
+    return this.fetch(`/tasks/${id}`, { method: 'DELETE' });
+  }
+
+  async getTaskStats(): Promise<TaskStats> {
+    return this.fetch('/tasks/stats');
   }
 
   // ========== GDPR Compliance ==========

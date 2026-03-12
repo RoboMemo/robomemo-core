@@ -12,14 +12,18 @@ import {
   Sun,
   Volume2,
   Bell,
-  BrainCircuit
+  BrainCircuit,
+  LogOut,
+  Users,
+  CheckSquare,
+  Briefcase
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Sheet, SheetContent, SheetTrigger } from '@/components/ui/sheet';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
-import AccessGate from '@/components/AccessGate';
+import LoginPage from '@/components/LoginPage';
 import DatasetManager from '@/sections/DatasetManager';
 import DataCollection from '@/sections/DataCollection';
 import DataAnnotation from '@/sections/DataAnnotation';
@@ -30,12 +34,14 @@ import AutoAnnotation from '@/sections/AutoAnnotation';
 import StructuredVQA from '@/sections/StructuredVQA';
 import PlatformStats from '@/sections/PlatformStats';
 import GenRobotDataset from '@/sections/GenRobotDataset';
+import UserManagement from '@/sections/UserManagement';
+import MyTasks from '@/sections/MyTasks';
+import TaskManagement from '@/sections/TaskManagement';
+import api from '@/services/api';
+import type { User } from '@/types';
 import './App.css';
 
-const ACCESS_CODE = '60602656';
-const STORAGE_KEY = 'robomemo_access';
-
-type Tab = 'datasets' | 'collection' | 'annotation' | 'visualization' | 'simulators' | 'augmentation' | 'autoannotation' | 'structuredvqa' | 'stats' | 'genrobot';
+type Tab = 'datasets' | 'collection' | 'annotation' | 'visualization' | 'simulators' | 'augmentation' | 'autoannotation' | 'structuredvqa' | 'stats' | 'genrobot' | 'users' | 'mytasks' | 'tasks';
 
 const tabs = [
   { id: 'datasets' as Tab, label: 'Datasets', icon: Database },
@@ -48,12 +54,14 @@ const tabs = [
   { id: 'simulators' as Tab, label: 'Simulators', icon: Cpu },
   { id: 'augmentation' as Tab, label: 'Augmentation', icon: Sparkles },
   { id: 'stats' as Tab, label: 'Statistics', icon: BarChart3 },
+  { id: 'mytasks' as Tab, label: 'My Tasks', icon: CheckSquare },
+  { id: 'tasks' as Tab, label: 'Task Management', icon: Briefcase },
+  { id: 'users' as Tab, label: 'Users', icon: Users },
 ];
 
 function App() {
-  const [authorized, setAuthorized] = useState(() => {
-    return localStorage.getItem(STORAGE_KEY) === ACCESS_CODE;
-  });
+  const [user, setUser] = useState<User | null>(null);
+  const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<Tab>('datasets');
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -63,8 +71,35 @@ function App() {
     notifications: true,
     autoSave: true,
     maxFileSize: 1024,
-    apiEndpoint: 'http://localhost:8000'
+    apiEndpoint: 'http://localhost:3001'
   });
+
+  useEffect(() => {
+    checkAuth();
+  }, []);
+
+  const checkAuth = async () => {
+    try {
+      const token = api.getToken();
+      if (token) {
+        const me = await api.getMe();
+        setUser(me);
+      }
+    } catch (err) {
+      api.logout();
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleLogin = (newUser: User) => {
+    setUser(newUser);
+  };
+
+  const handleLogout = () => {
+    api.logout();
+    setUser(null);
+  };
 
   const handleSettingChange = (key: string, value: any) => {
     setSettings(prev => ({
@@ -99,14 +134,30 @@ function App() {
         return <StructuredVQA />;
       case 'stats':
         return <PlatformStats />;
+      case 'mytasks':
+        return <MyTasks />;
+      case 'tasks':
+        return user?.role === 'platform_admin' || user?.role === 'reviewer' || user?.role === 'data_admin' ? <TaskManagement /> : <div className="text-center py-12 text-muted-foreground">Access denied</div>;
+      case 'users':
+        return user?.role === 'platform_admin' ? <UserManagement /> : <div className="text-center py-12 text-muted-foreground">Access denied</div>;
       default:
         return <DatasetManager />;
     }
   };
 
-  if (!authorized) {
-    return <AccessGate onAuthorized={() => setAuthorized(true)} />;
+  if (loading) {
+    return <div className="min-h-screen flex items-center justify-center">Loading...</div>;
   }
+
+  if (!user) {
+    return <LoginPage onLogin={handleLogin} />;
+  }
+
+  const visibleTabs = tabs.filter(tab => {
+    if (tab.id === 'users') return user.role === 'platform_admin';
+    if (tab.id === 'tasks') return user.role === 'platform_admin' || user.role === 'reviewer' || user.role === 'data_admin';
+    return true;
+  });
 
   return (
     <div className="min-h-screen bg-background flex">
@@ -115,10 +166,14 @@ function App() {
         <div className="p-6 border-b">
           <h1 className="text-xl font-bold text-primary">Embodied Data Platform</h1>
           <p className="text-xs text-muted-foreground mt-1">v1.0.0</p>
+          <div className="mt-3 pt-3 border-t">
+            <p className="text-xs font-medium text-muted-foreground">{user.name}</p>
+            <p className="text-xs text-muted-foreground capitalize">{user.role.replace('_', ' ')}</p>
+          </div>
         </div>
         
-        <nav className="flex-1 p-4 space-y-1">
-          {tabs.map((tab) => {
+        <nav className="flex-1 p-4 space-y-1 overflow-y-auto">
+          {visibleTabs.map((tab) => {
             const Icon = tab.icon;
             return (
               <button
@@ -137,7 +192,7 @@ function App() {
           })}
         </nav>
         
-        <div className="p-4 border-t">
+        <div className="p-4 border-t space-y-2">
           <Dialog open={isSettingsOpen} onOpenChange={setIsSettingsOpen}>
             <DialogTrigger asChild>
               <Button variant="outline" className="w-full" size="sm">
@@ -164,7 +219,7 @@ function App() {
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-3">
                     <Volume2 className="w-4 h-4" />
-                    <Label className="text-sm font-medium">Sound Effects</Label>
+                    <Label className="text-sm font-medium">Sound</Label>
                   </div>
                   <Switch 
                     checked={settings.soundEnabled}
@@ -182,40 +237,23 @@ function App() {
                     onCheckedChange={(v) => handleSettingChange('notifications', v)}
                   />
                 </div>
-
-                <div className="border-t pt-4">
-                  <Label className="text-sm font-medium block mb-2">API Endpoint</Label>
-                  <input 
-                    type="text" 
-                    value={settings.apiEndpoint}
-                    onChange={(e) => handleSettingChange('apiEndpoint', e.target.value)}
-                    className="w-full px-3 py-2 border border-input rounded-md text-sm"
-                  />
-                </div>
-
-                <div className="flex items-center justify-between">
-                  <Label className="text-sm font-medium">Auto-Save</Label>
-                  <Switch 
-                    checked={settings.autoSave}
-                    onCheckedChange={(v) => handleSettingChange('autoSave', v)}
-                  />
-                </div>
-
-                <div className="pt-4 border-t">
-                  <Button variant="outline" className="w-full" size="sm">
-                    Reset to Defaults
-                  </Button>
-                </div>
               </div>
             </DialogContent>
           </Dialog>
+          <Button variant="outline" className="w-full" size="sm" onClick={handleLogout}>
+            <LogOut className="w-4 h-4 mr-2" />
+            Logout
+          </Button>
         </div>
       </aside>
 
       {/* Mobile Header */}
       <div className="lg:hidden fixed top-0 left-0 right-0 z-50 bg-card border-b">
         <div className="flex items-center justify-between p-4">
-          <h1 className="text-lg font-bold">Embodied Data Platform</h1>
+          <div>
+            <h1 className="text-lg font-bold">RoboMemo</h1>
+            <p className="text-xs text-muted-foreground">{user.name}</p>
+          </div>
           <Sheet open={isMobileMenuOpen} onOpenChange={setIsMobileMenuOpen}>
             <SheetTrigger asChild>
               <Button variant="ghost" size="icon">
@@ -224,10 +262,11 @@ function App() {
             </SheetTrigger>
             <SheetContent side="left" className="w-64 p-0">
               <div className="p-6 border-b">
-                <h1 className="text-xl font-bold">Embodied Data Platform</h1>
+                <h1 className="text-xl font-bold">RoboMemo</h1>
+                <p className="text-xs text-muted-foreground mt-2">{user.name}</p>
               </div>
               <nav className="p-4 space-y-1">
-                {tabs.map((tab) => {
+                {visibleTabs.map((tab) => {
                   const Icon = tab.icon;
                   return (
                     <button
@@ -248,6 +287,12 @@ function App() {
                   );
                 })}
               </nav>
+              <div className="p-4 border-t">
+                <Button variant="outline" className="w-full" size="sm" onClick={handleLogout}>
+                  <LogOut className="w-4 h-4 mr-2" />
+                  Logout
+                </Button>
+              </div>
             </SheetContent>
           </Sheet>
         </div>
