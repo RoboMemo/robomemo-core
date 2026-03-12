@@ -220,6 +220,40 @@ class ApiService {
     return this.fetch('/orders/stats');
   }
 
+  // ========== Batch Operations ==========
+
+  async batchImportEpisodes(datasetId: string, episodes: any[]): Promise<any> {
+    return this.fetch('/batch/import-episodes', {
+      method: 'POST',
+      body: JSON.stringify({ datasetId, episodes }),
+    });
+  }
+
+  async batchAssignTasks(params: { episodeIds: string[]; assignees: string[]; type?: string; priority?: string; datasetId?: string }): Promise<any> {
+    return this.fetch('/batch/assign-tasks', {
+      method: 'POST',
+      body: JSON.stringify(params),
+    });
+  }
+
+  async batchExport(params: { datasetId?: string; format?: string; includeAnnotations?: boolean }): Promise<any> {
+    return this.fetch('/batch/export', {
+      method: 'POST',
+      body: JSON.stringify(params),
+    });
+  }
+
+  async batchAutoAnnotate(episodeIds: string[], modelId?: string): Promise<any> {
+    return this.fetch('/batch/auto-annotate', {
+      method: 'POST',
+      body: JSON.stringify({ episodeIds, modelId }),
+    });
+  }
+
+  async getBatchJobStatus(jobId: string): Promise<any> {
+    return this.fetch(`/batch/jobs/${jobId}`);
+  }
+
   // ========== GDPR Compliance ==========
 
   async gdprAccessRequest(subjectId: string): Promise<any> {

@@ -2132,6 +2132,135 @@ app.delete('/api/tasks/:id', authMiddleware, requireRole('platform_admin'), (req
   res.json({ success: true });
 });
 
+// ========== BATCH OPERATIONS API ==========
+
+// In-memory batch jobs
+const batchJobs = {};
+
+// POST /api/batch/import-episodes — bulk import episodes from JSON/CSV
+app.post('/api/batch/import-episodes', authMiddleware, requireRole('platform_admin', 'data_admin'), (req, res) => {
+  const { datasetId, episodes, format } = req.body;
+  if (!datasetId || !episodes || !Array.isArray(episodes)) {
+    return res.status(400).json({ error: 'datasetId and episodes array required' });
+  }
+  const jobId = `batch_import_${Date.now()}`;
+  batchJobs[jobId] = { id: jobId, type: 'import', status: 'processing', progress: 0, total: episodes.length, createdAt: new Date().toISOString() };
+
+  // Process immediately (synchronous for simplicity in MVP)
+  let imported = 0;
+  for (const ep of episodes) {
+    Episodes.insert({
+      id: ep.id || `ep_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      datasetId,
+      name: ep.name || ep.title,
+      description: ep.description,
+      skill: ep.skill,
+      category: ep.category,
+      h5_path: ep.h5_path,
+      frameCount: ep.frameCount || 0,
+      duration: ep.duration || 0,
+      fps: ep.fps || 30,
+      robot: ep.robot,
+      bimanual: ep.bimanual || false,
+      sensors: ep.sensors || [],
+      createdAt: new Date().toISOString(),
+    });
+    imported++;
+  }
+  batchJobs[jobId] = { ...batchJobs[jobId], status: 'completed', progress: 100, imported };
+  res.json(batchJobs[jobId]);
+});
+
+// POST /api/batch/assign-tasks — bulk task assignment
+app.post('/api/batch/assign-tasks', authMiddleware, requireRole('platform_admin', 'reviewer', 'data_admin'), (req, res) => {
+  const { episodeIds, assignees, type, priority, datasetId } = req.body;
+  if (!episodeIds || !Array.isArray(episodeIds) || !assignees || !Array.isArray(assignees)) {
+    return res.status(400).json({ error: 'episodeIds and assignees arrays required' });
+  }
+
+  const jobId = `batch_assign_${Date.now()}`;
+  const tasks = [];
+  const perAssignee = Math.ceil(episodeIds.length / assignees.length);
+
+  for (let i = 0; i < assignees.length; i++) {
+    const start = i * perAssignee;
+    const end = Math.min(start + perAssignee, episodeIds.length);
+    const eps = episodeIds.slice(start, end);
+    if (eps.length === 0) continue;
+    const task = Tasks.insert({
+      title: `Batch ${type || 'annotation'} — ${eps.length} episodes`,
+      description: `Auto-assigned batch task`,
+      type: type || 'annotation',
+      status: 'assigned',
+      priority: priority || 'normal',
+      datasetId: datasetId || null,
+      episodeIds: eps,
+      assignedTo: assignees[i],
+      assignedBy: req.user.userId,
+    });
+    tasks.push(task);
+  }
+
+  batchJobs[jobId] = { id: jobId, type: 'assign', status: 'completed', progress: 100, tasksCreated: tasks.length, createdAt: new Date().toISOString() };
+  res.json({ ...batchJobs[jobId], tasks });
+});
+
+// POST /api/batch/export — bulk export
+app.post('/api/batch/export', authMiddleware, (req, res) => {
+  const { datasetId, format, includeAnnotations, includeReviews } = req.body;
+  const datasets = datasetId ? [Datasets.getById(datasetId)] : Datasets.getAll();
+  const episodes = datasetId ? Episodes.getByDataset(datasetId) : Episodes.getAll();
+  const annotations = includeAnnotations !== false ? Annotations.getAll() : [];
+
+  const result = {
+    exportedAt: new Date().toISOString(),
+    format: format || 'json',
+    datasets: datasets.filter(Boolean).length,
+    episodes: episodes.length,
+    annotations: annotations.length,
+    data: { datasets: datasets.filter(Boolean), episodes, annotations },
+  };
+
+  res.json(result);
+});
+
+// POST /api/batch/auto-annotate — bulk auto-annotation
+app.post('/api/batch/auto-annotate', authMiddleware, requireRole('platform_admin', 'data_admin'), (req, res) => {
+  const { episodeIds, modelId } = req.body;
+  if (!episodeIds || !Array.isArray(episodeIds)) {
+    return res.status(400).json({ error: 'episodeIds array required' });
+  }
+
+  const jobId = `batch_auto_${Date.now()}`;
+  batchJobs[jobId] = { id: jobId, type: 'auto-annotate', status: 'processing', progress: 0, total: episodeIds.length, createdAt: new Date().toISOString() };
+
+  // Simulate async processing
+  setTimeout(() => {
+    const annotations = episodeIds.map(epId => ({
+      id: `ann_auto_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      episodeId: epId,
+      type: 'label',
+      label: 'Auto-annotated',
+      confidence: 0.85 + Math.random() * 0.1,
+      annotator: `VLM-${modelId || 'auto'}`,
+      verified: false,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    }));
+    Annotations.insertMany(annotations);
+    batchJobs[jobId] = { ...batchJobs[jobId], status: 'completed', progress: 100, annotated: annotations.length };
+  }, 2000);
+
+  res.json(batchJobs[jobId]);
+});
+
+// GET /api/batch/jobs/:jobId
+app.get('/api/batch/jobs/:jobId', authMiddleware, (req, res) => {
+  const job = batchJobs[req.params.jobId];
+  if (!job) return res.status(404).json({ error: 'Job not found' });
+  res.json(job);
+});
+
 // ========== ORDER MANAGEMENT API ==========
 
 // GET /api/orders/stats — must be before :id

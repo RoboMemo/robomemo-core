@@ -18,7 +18,8 @@ import {
   CheckSquare,
   Briefcase,
   ShieldCheck,
-  Package
+  Package,
+  Zap
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Sheet, SheetContent, SheetTrigger } from '@/components/ui/sheet';
@@ -41,11 +42,12 @@ import MyTasks from '@/sections/MyTasks';
 import TaskManagement from '@/sections/TaskManagement';
 import QualityControl from '@/sections/QualityControl';
 import OrderManagement from '@/sections/OrderManagement';
+import BatchOperations from '@/sections/BatchOperations';
 import api from '@/services/api';
 import type { User } from '@/types';
 import './App.css';
 
-type Tab = 'datasets' | 'collection' | 'annotation' | 'visualization' | 'simulators' | 'augmentation' | 'autoannotation' | 'structuredvqa' | 'stats' | 'genrobot' | 'users' | 'mytasks' | 'tasks' | 'quality' | 'orders';
+type Tab = 'datasets' | 'collection' | 'annotation' | 'visualization' | 'simulators' | 'augmentation' | 'autoannotation' | 'structuredvqa' | 'stats' | 'genrobot' | 'users' | 'mytasks' | 'tasks' | 'quality' | 'orders' | 'batch';
 
 const tabs = [
   { id: 'datasets' as Tab, label: 'Datasets', icon: Database },
@@ -62,6 +64,7 @@ const tabs = [
   { id: 'tasks' as Tab, label: 'Task Management', icon: Briefcase },
   { id: 'quality' as Tab, label: 'Quality Control', icon: ShieldCheck },
   { id: 'orders' as Tab, label: 'Orders', icon: Package },
+  { id: 'batch' as Tab, label: 'Batch Ops', icon: Zap },
   { id: 'users' as Tab, label: 'Users', icon: Users },
 ];
 
@@ -148,6 +151,8 @@ function App() {
         return user?.role === 'platform_admin' || user?.role === 'reviewer' ? <QualityControl /> : <div className="text-center py-12 text-muted-foreground">Access denied</div>;
       case 'orders':
         return user?.role === 'platform_admin' || user?.role === 'data_admin' ? <OrderManagement /> : <div className="text-center py-12 text-muted-foreground">Access denied</div>;
+      case 'batch':
+        return user?.role === 'platform_admin' || user?.role === 'data_admin' ? <BatchOperations /> : <div className="text-center py-12 text-muted-foreground">Access denied</div>;
       case 'users':
         return user?.role === 'platform_admin' ? <UserManagement /> : <div className="text-center py-12 text-muted-foreground">Access denied</div>;
       default:
@@ -168,6 +173,7 @@ function App() {
     if (tab.id === 'tasks') return user.role === 'platform_admin' || user.role === 'reviewer' || user.role === 'data_admin';
     if (tab.id === 'quality') return user.role === 'platform_admin' || user.role === 'reviewer';
     if (tab.id === 'orders') return user.role === 'platform_admin' || user.role === 'data_admin';
+    if (tab.id === 'batch') return user.role === 'platform_admin' || user.role === 'data_admin';
     return true;
   });
 
