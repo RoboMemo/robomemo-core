@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { 
   Database, 
   Play, 
@@ -19,6 +19,7 @@ import { Sheet, SheetContent, SheetTrigger } from '@/components/ui/sheet';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
+import AccessGate from '@/components/AccessGate';
 import DatasetManager from '@/sections/DatasetManager';
 import DataCollection from '@/sections/DataCollection';
 import DataAnnotation from '@/sections/DataAnnotation';
@@ -30,6 +31,9 @@ import StructuredVQA from '@/sections/StructuredVQA';
 import PlatformStats from '@/sections/PlatformStats';
 import GenRobotDataset from '@/sections/GenRobotDataset';
 import './App.css';
+
+const ACCESS_CODE = '60602656';
+const STORAGE_KEY = 'robomemo_access';
 
 type Tab = 'datasets' | 'collection' | 'annotation' | 'visualization' | 'simulators' | 'augmentation' | 'autoannotation' | 'structuredvqa' | 'stats' | 'genrobot';
 
@@ -47,6 +51,9 @@ const tabs = [
 ];
 
 function App() {
+  const [authorized, setAuthorized] = useState(() => {
+    return localStorage.getItem(STORAGE_KEY) === ACCESS_CODE;
+  });
   const [activeTab, setActiveTab] = useState<Tab>('datasets');
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -96,6 +103,10 @@ function App() {
         return <DatasetManager />;
     }
   };
+
+  if (!authorized) {
+    return <AccessGate onAuthorized={() => setAuthorized(true)} />;
+  }
 
   return (
     <div className="min-h-screen bg-background flex">

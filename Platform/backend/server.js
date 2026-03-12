@@ -24,13 +24,31 @@ const app = express();
 const port = process.env.PORT || 3001;
 
 // ─── Security Middleware ──────────────────────────────────────────────────────
-// Helmet: security headers (CSP, HSTS, X-Frame-Options, etc.)
-app.use(helmet({ contentSecurityPolicy: false })); // CSP off for SPA
 
-// CORS: restrict origins in production
+// CORS: must be before helmet so preflight OPTIONS gets handled
 const corsOrigins = (process.env.CORS_ORIGINS || 'http://localhost:5173,http://localhost:3000')
   .split(',').map(s => s.trim());
-app.use(cors({ origin: corsOrigins, credentials: true }));
+app.use(cors({ 
+  origin: (origin, callback) => {
+    // Allow requests with no origin (mobile apps, curl, etc.)
+    if (!origin) return callback(null, true);
+    // Allow configured origins
+    if (corsOrigins.includes(origin)) return callback(null, true);
+    // Allow Cloudflare Pages and trycloudflare domains
+    if (origin.endsWith('.pages.dev') || origin.endsWith('.trycloudflare.com')) return callback(null, true);
+    callback(null, false);
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-API-Key']
+}));
+
+// Helmet: security headers (CSP, HSTS, X-Frame-Options, etc.)
+app.use(helmet({ 
+  contentSecurityPolicy: false,
+  crossOriginResourcePolicy: { policy: 'cross-origin' },
+  crossOriginOpenerPolicy: false
+}));
 
 app.use(express.json({ limit: '50mb' }));
 app.use(morgan('dev'));
@@ -60,6 +78,16 @@ auditLog.initAuditLog(db);
 
 // Serve uploaded videos as static (for browser preview)
 app.use('/uploads/videos', express.static(path.join(__dirname, 'uploads', 'videos')));
+
+// Serve downloaded dataset files (LeRobot videos, GenRobot H5, etc.)
+app.use('/data', express.static(path.join(__dirname, 'data'), {
+  setHeaders: (res, filePath) => {
+    if (filePath.endsWith('.mp4')) {
+      res.setHeader('Content-Type', 'video/mp4');
+      res.setHeader('Accept-Ranges', 'bytes');
+    }
+  }
+}));
 
 // Apply geo-fence (blocks CN/HK IPs)
 app.use(geoFenceMiddleware);
@@ -349,6 +377,92 @@ app.delete('/api/datasets/:id', (req, res) => {
 
 app.get('/api/datasets/:id/episodes', (req, res) => {
   res.json(Episodes.getByDataset(req.params.id));
+});
+
+// Get video/media URLs for a specific episode
+app.get('/api/episodes/:id/media', (req, res) => {
+  const episode = Episodes.getById(req.params.id);
+  if (!episode) return res.status(404).json({ error: 'Episode not found' });
+  
+  const dataset = Datasets.getById(episode.datasetId);
+  if (!dataset) return res.status(404).json({ error: 'Dataset not found' });
+  
+  const sensorConfig = typeof dataset.sensorConfig === 'string' 
+    ? JSON.parse(dataset.sensorConfig || '{}') 
+    : (dataset.sensorConfig || {});
+  const sensors = sensorConfig.sensors || [];
+  
+  const media = { videos: [], images: [], dataFiles: [] };
+  const dataDir = path.join(__dirname, 'data');
+  
+  if (dataset.format === 'lerobot_v3') {
+    // LeRobot v3: check for video files per camera
+    const dsSource = dataset.source || '';
+    const dsId = dataset.id;
+    
+    // Map dataset IDs to local directory names
+    const dirMap = {
+      'lerobot_pusht': 'lerobot_pusht',
+      'lerobot_xarm_lift': 'lerobot_xarm_lift',
+      'aloha_static_cups': 'lerobot_aloha_cups',
+      'aloha_mobile_shrimp': 'lerobot_aloha_shrimp',
+    };
+    const localDir = dirMap[dsId];
+    if (localDir) {
+      const dsPath = path.join(dataDir, 'datasets', localDir);
+      // Read info.json to get camera keys
+      try {
+        const info = JSON.parse(fs.readFileSync(path.join(dsPath, 'meta', 'info.json'), 'utf-8'));
+        const cameraKeys = Object.keys(info.features || {}).filter(k => k.includes('image'));
+        
+        for (const camKey of cameraKeys) {
+          // Find video file for this camera
+          const videoDir = path.join(dsPath, 'videos', camKey, 'chunk-000');
+          if (fs.existsSync(videoDir)) {
+            const videoFiles = fs.readdirSync(videoDir).filter(f => f.endsWith('.mp4'));
+            for (const vf of videoFiles) {
+              const feat = info.features[camKey] || {};
+              media.videos.push({
+                camera: camKey.replace('observation.images.', '').replace('observation.', ''),
+                url: `/data/datasets/${localDir}/videos/${camKey}/chunk-000/${vf}`,
+                resolution: feat.shape ? `${feat.shape[1]}x${feat.shape[0]}` : 'unknown',
+                codec: feat.video_info?.['video.codec'] || 'unknown',
+                fps: feat.video_info?.['video.fps'] || info.fps
+              });
+            }
+          }
+        }
+      } catch (e) {
+        console.error('Error reading LeRobot meta:', e.message);
+      }
+    }
+  } else if (dataset.format === 'h5') {
+    // GenRobot H5: return H5 file path  
+    if (episode.h5_path) {
+      // h5_path is relative to backend/data/, e.g. "genrobot_open_dataset/..."
+      const cleanPath = episode.h5_path.replace(/^data\//, '');
+      media.dataFiles.push({
+        type: 'h5',
+        path: episode.h5_path,
+        url: `/data/${cleanPath}`,
+        sensors: ['mid_fisheye_color', 'imu_6axis', 'tactile_left', 'tactile_right']
+      });
+    }
+  }
+  
+  // Add sensor metadata
+  media.sensorConfig = sensorConfig;
+  media.episodeInfo = {
+    id: episode.id,
+    name: episode.name,
+    frameCount: episode.frameCount,
+    duration: episode.duration,
+    fps: episode.fps,
+    skill: episode.skill,
+    bimanual: episode.bimanual
+  };
+  
+  res.json(media);
 });
 
 // ========== COLLECTIONS API ==========
