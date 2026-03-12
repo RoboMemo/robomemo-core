@@ -191,8 +191,24 @@ function App() {
       {/* Desktop Sidebar */}
       <aside className="hidden lg:flex w-64 flex-col border-r bg-card">
         <div className="p-6 border-b">
-          <h1 className="text-xl font-bold text-primary">Embodied Data Platform</h1>
-          <p className="text-xs text-muted-foreground mt-1">v1.0.0</p>
+          <div className="flex items-center gap-3 mb-1">
+            <svg width="36" height="36" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <rect width="36" height="36" rx="8" fill="hsl(var(--primary))" opacity="0.12"/>
+              <rect x="8" y="10" width="20" height="14" rx="3" stroke="hsl(var(--primary))" strokeWidth="2" fill="none"/>
+              <circle cx="14" cy="17" r="2" fill="hsl(var(--primary))"/>
+              <circle cx="22" cy="17" r="2" fill="hsl(var(--primary))"/>
+              <line x1="14" y1="22" x2="22" y2="22" stroke="hsl(var(--primary))" strokeWidth="1.5" strokeLinecap="round"/>
+              <line x1="12" y1="8" x2="12" y2="10" stroke="hsl(var(--primary))" strokeWidth="2" strokeLinecap="round"/>
+              <line x1="24" y1="8" x2="24" y2="10" stroke="hsl(var(--primary))" strokeWidth="2" strokeLinecap="round"/>
+              <rect x="26" y="15" width="4" height="3" rx="1" fill="hsl(var(--primary))" opacity="0.5"/>
+              <rect x="6" y="15" width="4" height="3" rx="1" fill="hsl(var(--primary))" opacity="0.5"/>
+            </svg>
+            <div>
+              <h1 className="text-lg font-bold text-primary leading-tight">RoboMemo</h1>
+              <p className="text-[10px] text-muted-foreground">Embodied Data Platform</p>
+            </div>
+          </div>
+          <p className="text-xs text-muted-foreground">v1.0.0</p>
           <div className="mt-3 pt-3 border-t">
             <p className="text-xs font-medium text-muted-foreground">{user.name}</p>
             <p className="text-xs text-muted-foreground capitalize">{user.role.replace('_', ' ')}</p>
