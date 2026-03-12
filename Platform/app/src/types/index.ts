@@ -52,6 +52,47 @@ export interface TaskStats {
   byAssignee: Record<string, number>;
 }
 
+// ========== Review & Quality Types ==========
+
+export type ReviewStatus = 'pending' | 'approved' | 'rejected' | 'needs_revision';
+
+export interface Review {
+  id: string;
+  taskId?: string;
+  annotationId?: string;
+  reviewerId: string;
+  status: ReviewStatus;
+  score?: number;
+  feedback?: string;
+  createdAt: string;
+}
+
+export interface ReviewStats {
+  total: number;
+  byStatus: Record<string, number>;
+  averageScore: number | null;
+  byReviewer: Array<{ reviewerId: string; count: number; averageScore: number | null }>;
+}
+
+export interface QualityDashboard {
+  total: number;
+  byStatus: Record<string, number>;
+  averageScore: number | null;
+  byReviewer: Array<{ reviewerId: string; count: number; averageScore: number | null }>;
+  completedTasks: number;
+  qualityScore: number;
+  reviewBacklog: number;
+}
+
+export interface AnnotatorQuality {
+  userId: string;
+  totalReviews: number;
+  averageScore: number | null;
+  approved: number;
+  rejected: number;
+  approvalRate: number;
+}
+
 // ========== Audit Log Types ==========
 
 export interface AuditEvent {

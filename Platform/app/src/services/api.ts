@@ -4,7 +4,8 @@ import type {
   PlatformStats, TimelineEntry,
   StructuredVQAAnalysis, VQAAnnotationRecord, VLMProvider,
   TemporalConsistencyCheck,
-  Task, TaskStats
+  Task, TaskStats,
+  Review, ReviewStats, QualityDashboard, AnnotatorQuality
 } from '@/types';
 
 const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:3001/api';
@@ -141,6 +142,31 @@ class ApiService {
 
   async getTaskStats(): Promise<TaskStats> {
     return this.fetch('/tasks/stats');
+  }
+
+  // ========== Reviews & Quality Control ==========
+
+  async createReview(review: Partial<Review>): Promise<Review> {
+    return this.fetch('/reviews', {
+      method: 'POST',
+      body: JSON.stringify(review),
+    });
+  }
+
+  async getTaskReviews(taskId: string): Promise<Review[]> {
+    return this.fetch(`/reviews/task/${taskId}`);
+  }
+
+  async getReviewStats(): Promise<ReviewStats> {
+    return this.fetch('/reviews/stats');
+  }
+
+  async getAnnotatorQuality(userId: string): Promise<AnnotatorQuality> {
+    return this.fetch(`/quality/annotator/${userId}`);
+  }
+
+  async getQualityDashboard(): Promise<QualityDashboard> {
+    return this.fetch('/quality/dashboard');
   }
 
   // ========== GDPR Compliance ==========

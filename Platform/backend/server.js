@@ -70,7 +70,7 @@ const upload = multer({ storage });
 
 // Data management — SQLite via db.js
 const DATA_DIR = path.join(__dirname, 'data'); // kept for GenRobot static files
-const { db, Datasets, Episodes, Annotations, Collections, Lineage, Tasks, syncFromJSON, getStats, getFullStats, getDatasetStats, getAnnotationStats, getTimeline } = require('./db');
+const { db, Datasets, Episodes, Annotations, Collections, Lineage, Tasks, Reviews, syncFromJSON, getStats, getFullStats, getDatasetStats, getAnnotationStats, getTimeline } = require('./db');
 
 // Initialize auth & audit on the shared DB instance
 initAuth(db);
@@ -2130,6 +2130,55 @@ app.delete('/api/tasks/:id', authMiddleware, requireRole('platform_admin'), (req
   Tasks.delete(req.params.id);
   auditLog.write({ event: 'TASK_DELETE', userId: req.user.userId, action: 'delete', resource: `task:${req.params.id}`, result: 'success' });
   res.json({ success: true });
+});
+
+// ========== QUALITY CONTROL API ==========
+
+// POST /api/reviews — submit review
+app.post('/api/reviews', authMiddleware, requireRole('platform_admin', 'reviewer'), (req, res) => {
+  const review = Reviews.insert({ ...req.body, reviewerId: req.user.userId });
+  auditLog.write({ event: 'REVIEW_CREATE', userId: req.user.userId, action: 'create', resource: `review:${review.id}`, result: 'success' });
+  res.status(201).json(review);
+});
+
+// GET /api/reviews/task/:taskId — task reviews
+app.get('/api/reviews/task/:taskId', authMiddleware, (req, res) => {
+  res.json(Reviews.getByTask(req.params.taskId));
+});
+
+// GET /api/reviews/stats — review statistics
+app.get('/api/reviews/stats', authMiddleware, requireRole('platform_admin', 'reviewer'), (req, res) => {
+  res.json(Reviews.getStats());
+});
+
+// GET /api/quality/annotator/:userId — annotator quality report
+app.get('/api/quality/annotator/:userId', authMiddleware, requireRole('platform_admin', 'reviewer'), (req, res) => {
+  const reviews = Reviews.getByReviewer(req.params.userId);
+  const scores = reviews.filter(r => r.score !== null).map(r => r.score);
+  const avgScore = scores.length > 0 ? Math.round(scores.reduce((a, b) => a + b) / scores.length * 10) / 10 : null;
+  const approved = reviews.filter(r => r.status === 'approved').length;
+  const rejected = reviews.filter(r => r.status === 'rejected').length;
+  res.json({
+    userId: req.params.userId,
+    totalReviews: reviews.length,
+    averageScore: avgScore,
+    approved,
+    rejected,
+    approvalRate: reviews.length > 0 ? Math.round(approved / reviews.length * 100) : 0,
+  });
+});
+
+// GET /api/quality/dashboard — quality dashboard data
+app.get('/api/quality/dashboard', authMiddleware, requireRole('platform_admin', 'reviewer'), (req, res) => {
+  const stats = Reviews.getStats();
+  const allTasks = Tasks.getAll();
+  const completedTasks = allTasks.filter(t => t.status === 'completed').length;
+  res.json({
+    ...stats,
+    completedTasks,
+    qualityScore: stats.averageScore || 0,
+    reviewBacklog: stats.byStatus['pending'] || 0,
+  });
 });
 
 // GenRobot Dataset API

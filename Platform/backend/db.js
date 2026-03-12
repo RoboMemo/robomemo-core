@@ -684,7 +684,87 @@ const Tasks = {
   },
 };
 
+// ─── Reviews ──────────────────────────────────────────────────────────────────
+db.exec(`
+  CREATE TABLE IF NOT EXISTS reviews (
+    id            TEXT PRIMARY KEY,
+    task_id       TEXT,
+    annotation_id TEXT,
+    reviewer_id   TEXT NOT NULL,
+    status        TEXT NOT NULL DEFAULT 'pending',
+    score         INTEGER,
+    feedback      TEXT,
+    created_at    TEXT
+  );
+  CREATE INDEX IF NOT EXISTS idx_review_task     ON reviews(task_id);
+  CREATE INDEX IF NOT EXISTS idx_review_reviewer ON reviews(reviewer_id);
+  CREATE INDEX IF NOT EXISTS idx_review_status   ON reviews(status);
+`);
+
+const REVIEW_RENAME = {
+  task_id:       'taskId',
+  annotation_id: 'annotationId',
+  reviewer_id:   'reviewerId',
+  created_at:    'createdAt',
+};
+
+function parseReviewRow(row) {
+  if (!row) return null;
+  const out = {};
+  for (const [k, v] of Object.entries(row)) {
+    out[REVIEW_RENAME[k] ?? k] = v;
+  }
+  return out;
+}
+
+const Reviews = {
+  getAll: () =>
+    db.prepare('SELECT * FROM reviews ORDER BY created_at DESC').all().map(parseReviewRow),
+
+  getById: (id) =>
+    parseReviewRow(db.prepare('SELECT * FROM reviews WHERE id = ?').get(id)),
+
+  getByTask: (taskId) =>
+    db.prepare('SELECT * FROM reviews WHERE task_id = ? ORDER BY created_at DESC')
+      .all(taskId).map(parseReviewRow),
+
+  getByReviewer: (reviewerId) =>
+    db.prepare('SELECT * FROM reviews WHERE reviewer_id = ? ORDER BY created_at DESC')
+      .all(reviewerId).map(parseReviewRow),
+
+  insert: (r) => {
+    const id = r.id || `rev_${Date.now()}_${require('crypto').randomBytes(3).toString('hex')}`;
+    const now = new Date().toISOString();
+    db.prepare(`
+      INSERT INTO reviews (id, task_id, annotation_id, reviewer_id, status, score, feedback, created_at)
+      VALUES (?,?,?,?,?,?,?,?)
+    `).run(id, r.taskId || null, r.annotationId || null, r.reviewerId,
+      r.status || 'pending', r.score ?? null, r.feedback || null, r.createdAt || now);
+    return Reviews.getById(id);
+  },
+
+  getStats: () => {
+    const total = db.prepare('SELECT COUNT(*) as n FROM reviews').get().n;
+    const byStatus = db.prepare('SELECT status, COUNT(*) as count FROM reviews GROUP BY status').all();
+    const avgScore = db.prepare('SELECT AVG(score) as avg FROM reviews WHERE score IS NOT NULL').get().avg;
+    const byReviewer = db.prepare(`
+      SELECT reviewer_id, COUNT(*) as count, AVG(score) as avgScore
+      FROM reviews GROUP BY reviewer_id
+    `).all();
+    return {
+      total,
+      byStatus: Object.fromEntries(byStatus.map(r => [r.status, r.count])),
+      averageScore: avgScore ? Math.round(avgScore * 10) / 10 : null,
+      byReviewer: byReviewer.map(r => ({
+        reviewerId: r.reviewer_id,
+        count: r.count,
+        averageScore: r.avgScore ? Math.round(r.avgScore * 10) / 10 : null,
+      })),
+    };
+  },
+};
+
 module.exports = {
-  db, Datasets, Episodes, Annotations, Collections, Lineage, Tasks,
+  db, Datasets, Episodes, Annotations, Collections, Lineage, Tasks, Reviews,
   syncFromJSON, getStats, getFullStats, getDatasetStats, getAnnotationStats, getTimeline
 };
