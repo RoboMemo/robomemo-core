@@ -5,7 +5,8 @@ import type {
   StructuredVQAAnalysis, VQAAnnotationRecord, VLMProvider,
   TemporalConsistencyCheck,
   Task, TaskStats,
-  Review, ReviewStats, QualityDashboard, AnnotatorQuality
+  Review, ReviewStats, QualityDashboard, AnnotatorQuality,
+  Order, OrderStats
 } from '@/types';
 
 const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:3001/api';
@@ -167,6 +168,56 @@ class ApiService {
 
   async getQualityDashboard(): Promise<QualityDashboard> {
     return this.fetch('/quality/dashboard');
+  }
+
+  // ========== Order Management ==========
+
+  async getOrders(): Promise<Order[]> {
+    return this.fetch('/orders');
+  }
+
+  async getOrder(id: string): Promise<Order> {
+    return this.fetch(`/orders/${id}`);
+  }
+
+  async createOrder(order: Partial<Order>): Promise<Order> {
+    return this.fetch('/orders', {
+      method: 'POST',
+      body: JSON.stringify(order),
+    });
+  }
+
+  async updateOrder(id: string, updates: Partial<Order>): Promise<Order> {
+    return this.fetch(`/orders/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(updates),
+    });
+  }
+
+  async updateOrderStatus(id: string, status: string): Promise<Order> {
+    return this.fetch(`/orders/${id}/status`, {
+      method: 'PUT',
+      body: JSON.stringify({ status }),
+    });
+  }
+
+  async deleteOrder(id: string): Promise<void> {
+    return this.fetch(`/orders/${id}`, { method: 'DELETE' });
+  }
+
+  async getOrderTasks(orderId: string): Promise<Task[]> {
+    return this.fetch(`/orders/${orderId}/tasks`);
+  }
+
+  async createOrderTask(orderId: string, task: Partial<Task>): Promise<Task> {
+    return this.fetch(`/orders/${orderId}/tasks`, {
+      method: 'POST',
+      body: JSON.stringify(task),
+    });
+  }
+
+  async getOrderStats(): Promise<OrderStats> {
+    return this.fetch('/orders/stats');
   }
 
   // ========== GDPR Compliance ==========

@@ -70,7 +70,7 @@ const upload = multer({ storage });
 
 // Data management — SQLite via db.js
 const DATA_DIR = path.join(__dirname, 'data'); // kept for GenRobot static files
-const { db, Datasets, Episodes, Annotations, Collections, Lineage, Tasks, Reviews, syncFromJSON, getStats, getFullStats, getDatasetStats, getAnnotationStats, getTimeline } = require('./db');
+const { db, Datasets, Episodes, Annotations, Collections, Lineage, Tasks, Reviews, Orders, syncFromJSON, getStats, getFullStats, getDatasetStats, getAnnotationStats, getTimeline } = require('./db');
 
 // Initialize auth & audit on the shared DB instance
 initAuth(db);
@@ -2130,6 +2130,79 @@ app.delete('/api/tasks/:id', authMiddleware, requireRole('platform_admin'), (req
   Tasks.delete(req.params.id);
   auditLog.write({ event: 'TASK_DELETE', userId: req.user.userId, action: 'delete', resource: `task:${req.params.id}`, result: 'success' });
   res.json({ success: true });
+});
+
+// ========== ORDER MANAGEMENT API ==========
+
+// GET /api/orders/stats — must be before :id
+app.get('/api/orders/stats', authMiddleware, requireRole('platform_admin', 'data_admin'), (req, res) => {
+  res.json(Orders.getStats());
+});
+
+// POST /api/orders
+app.post('/api/orders', authMiddleware, requireRole('platform_admin', 'data_admin'), (req, res) => {
+  const order = Orders.insert({ ...req.body, createdBy: req.user.userId });
+  auditLog.write({ event: 'ORDER_CREATE', userId: req.user.userId, action: 'create', resource: `order:${order.id}`, result: 'success' });
+  res.status(201).json(order);
+});
+
+// GET /api/orders
+app.get('/api/orders', authMiddleware, requireRole('platform_admin', 'data_admin'), (req, res) => {
+  res.json(Orders.getAll());
+});
+
+// GET /api/orders/:id
+app.get('/api/orders/:id', authMiddleware, requireRole('platform_admin', 'data_admin'), (req, res) => {
+  const order = Orders.getById(req.params.id);
+  if (!order) return res.status(404).json({ error: 'Order not found' });
+  res.json(order);
+});
+
+// PUT /api/orders/:id
+app.put('/api/orders/:id', authMiddleware, requireRole('platform_admin', 'data_admin'), (req, res) => {
+  const order = Orders.update(req.params.id, req.body);
+  if (!order) return res.status(404).json({ error: 'Order not found' });
+  auditLog.write({ event: 'ORDER_UPDATE', userId: req.user.userId, action: 'update', resource: `order:${req.params.id}`, result: 'success' });
+  res.json(order);
+});
+
+// PUT /api/orders/:id/status
+app.put('/api/orders/:id/status', authMiddleware, requireRole('platform_admin', 'data_admin'), (req, res) => {
+  const { status } = req.body;
+  if (!status) return res.status(400).json({ error: 'status required' });
+  const order = Orders.update(req.params.id, { status });
+  if (!order) return res.status(404).json({ error: 'Order not found' });
+  auditLog.write({ event: 'ORDER_STATUS', userId: req.user.userId, action: 'update', resource: `order:${req.params.id}`, details: { status }, result: 'success' });
+  res.json(order);
+});
+
+// DELETE /api/orders/:id
+app.delete('/api/orders/:id', authMiddleware, requireRole('platform_admin'), (req, res) => {
+  const existing = Orders.getById(req.params.id);
+  if (!existing) return res.status(404).json({ error: 'Order not found' });
+  Orders.delete(req.params.id);
+  auditLog.write({ event: 'ORDER_DELETE', userId: req.user.userId, action: 'delete', resource: `order:${req.params.id}`, result: 'success' });
+  res.json({ success: true });
+});
+
+// GET /api/orders/:id/tasks — tasks linked to order
+app.get('/api/orders/:id/tasks', authMiddleware, (req, res) => {
+  const allTasks = Tasks.getAll();
+  const orderTasks = allTasks.filter(t => t.datasetId === req.params.id || t.description?.includes(req.params.id));
+  res.json(orderTasks);
+});
+
+// POST /api/orders/:id/tasks — create task for order
+app.post('/api/orders/:id/tasks', authMiddleware, requireRole('platform_admin', 'data_admin'), (req, res) => {
+  const order = Orders.getById(req.params.id);
+  if (!order) return res.status(404).json({ error: 'Order not found' });
+  const task = Tasks.insert({
+    ...req.body,
+    datasetId: order.datasetId,
+    assignedBy: req.user.userId,
+    description: `${req.body.description || ''} [Order: ${req.params.id}]`.trim(),
+  });
+  res.status(201).json(task);
 });
 
 // ========== QUALITY CONTROL API ==========

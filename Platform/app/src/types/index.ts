@@ -93,6 +93,36 @@ export interface AnnotatorQuality {
   approvalRate: number;
 }
 
+// ========== Order Types ==========
+
+export type OrderStatus = 'draft' | 'pending' | 'in_progress' | 'review' | 'completed' | 'cancelled';
+
+export interface Order {
+  id: string;
+  title: string;
+  description?: string;
+  clientName?: string;
+  clientContact?: string;
+  status: OrderStatus;
+  priority: string;
+  datasetId?: string;
+  totalEpisodes: number;
+  completedEpisodes: number;
+  dueDate?: string;
+  budget?: number;
+  actualCost: number;
+  createdBy?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface OrderStats {
+  total: number;
+  byStatus: Record<string, number>;
+  totalBudget: number;
+  totalCost: number;
+}
+
 // ========== Audit Log Types ==========
 
 export interface AuditEvent {

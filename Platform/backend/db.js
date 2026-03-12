@@ -764,7 +764,103 @@ const Reviews = {
   },
 };
 
+// ─── Orders ───────────────────────────────────────────────────────────────────
+db.exec(`
+  CREATE TABLE IF NOT EXISTS orders (
+    id                TEXT PRIMARY KEY,
+    title             TEXT NOT NULL,
+    description       TEXT,
+    client_name       TEXT,
+    client_contact    TEXT,
+    status            TEXT NOT NULL DEFAULT 'draft',
+    priority          TEXT DEFAULT 'normal',
+    dataset_id        TEXT,
+    total_episodes    INTEGER DEFAULT 0,
+    completed_episodes INTEGER DEFAULT 0,
+    due_date          TEXT,
+    budget            REAL,
+    actual_cost       REAL DEFAULT 0,
+    created_by        TEXT,
+    created_at        TEXT,
+    updated_at        TEXT
+  );
+  CREATE INDEX IF NOT EXISTS idx_order_status ON orders(status);
+  CREATE INDEX IF NOT EXISTS idx_order_client ON orders(client_name);
+`);
+
+const ORDER_JSON_COLS = new Set([]);
+const ORDER_RENAME = {
+  client_name:       'clientName',
+  client_contact:    'clientContact',
+  dataset_id:        'datasetId',
+  total_episodes:    'totalEpisodes',
+  completed_episodes:'completedEpisodes',
+  due_date:          'dueDate',
+  actual_cost:       'actualCost',
+  created_by:        'createdBy',
+  created_at:        'createdAt',
+  updated_at:        'updatedAt',
+};
+
+function parseOrderRow(row) {
+  if (!row) return null;
+  const out = {};
+  for (const [k, v] of Object.entries(row)) {
+    out[ORDER_RENAME[k] ?? k] = v;
+  }
+  return out;
+}
+
+const Orders = {
+  getAll: () =>
+    db.prepare('SELECT * FROM orders ORDER BY created_at DESC').all().map(parseOrderRow),
+
+  getById: (id) =>
+    parseOrderRow(db.prepare('SELECT * FROM orders WHERE id = ?').get(id)),
+
+  insert: (o) => {
+    const id = o.id || `order_${Date.now()}_${require('crypto').randomBytes(3).toString('hex')}`;
+    const now = new Date().toISOString();
+    db.prepare(`
+      INSERT OR REPLACE INTO orders
+        (id, title, description, client_name, client_contact, status, priority,
+         dataset_id, total_episodes, completed_episodes, due_date, budget,
+         actual_cost, created_by, created_at, updated_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    `).run(id, o.title, o.description || null, o.clientName || null,
+      o.clientContact || null, o.status || 'draft', o.priority || 'normal',
+      o.datasetId || null, o.totalEpisodes || 0, o.completedEpisodes || 0,
+      o.dueDate || null, o.budget || null, o.actualCost || 0,
+      o.createdBy || null, o.createdAt || now, now);
+    return Orders.getById(id);
+  },
+
+  update: (id, updates) => {
+    const existing = Orders.getById(id);
+    if (!existing) return null;
+    const merged = { ...existing, ...updates, updatedAt: new Date().toISOString() };
+    return Orders.insert({ ...merged, id });
+  },
+
+  delete: (id) => {
+    db.prepare('DELETE FROM orders WHERE id = ?').run(id);
+  },
+
+  getStats: () => {
+    const total = db.prepare('SELECT COUNT(*) as n FROM orders').get().n;
+    const byStatus = db.prepare('SELECT status, COUNT(*) as count FROM orders GROUP BY status').all();
+    const totalBudget = db.prepare('SELECT COALESCE(SUM(budget),0) as s FROM orders').get().s;
+    const totalCost = db.prepare('SELECT COALESCE(SUM(actual_cost),0) as s FROM orders').get().s;
+    return {
+      total,
+      byStatus: Object.fromEntries(byStatus.map(r => [r.status, r.count])),
+      totalBudget,
+      totalCost,
+    };
+  },
+};
+
 module.exports = {
-  db, Datasets, Episodes, Annotations, Collections, Lineage, Tasks, Reviews,
+  db, Datasets, Episodes, Annotations, Collections, Lineage, Tasks, Reviews, Orders,
   syncFromJSON, getStats, getFullStats, getDatasetStats, getAnnotationStats, getTimeline
 };
