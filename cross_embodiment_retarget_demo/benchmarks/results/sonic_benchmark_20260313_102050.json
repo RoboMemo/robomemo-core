@@ -1,0 +1,159 @@
+{
+  "timestamp": "2026-03-13 10:20:50",
+  "system": {
+    "gpu": "NVIDIA GeForce RTX 5090",
+    "python": "3.10.12",
+    "numpy": "2.2.6",
+    "onnxruntime": "1.23.2",
+    "os": "Linux 6.8.0-101-generic (x86_64)",
+    "backend": "Mock"
+  },
+  "config": {
+    "iterations": 10000,
+    "warmup": 500,
+    "sustained_duration": 10.0,
+    "target_hz": 50,
+    "target_dt_ms": 20.0
+  },
+  "latency": [
+    {
+      "stage": "Proprioception pack",
+      "mean_ms": 0.0006166402,
+      "median_ms": 0.000609,
+      "p95_ms": 0.000646,
+      "p99_ms": 0.0007180100000000003,
+      "min_ms": 0.000575,
+      "max_ms": 0.003128,
+      "std_ms": 5.8554833651544086e-05,
+      "count": 10000
+    },
+    {
+      "stage": "Backend.infer (raw IK)",
+      "mean_ms": 0.050972562900000004,
+      "median_ms": 0.0505785,
+      "p95_ms": 0.053623,
+      "p99_ms": 0.05532413,
+      "min_ms": 0.04589,
+      "max_ms": 0.092224,
+      "std_ms": 0.0020052930151585303,
+      "count": 10000
+    },
+    {
+      "stage": "Post-processing",
+      "mean_ms": 0.0042954256000000005,
+      "median_ms": 0.004257,
+      "p95_ms": 0.004623,
+      "p99_ms": 0.004866100000000002,
+      "min_ms": 0.003734,
+      "max_ms": 0.008055,
+      "std_ms": 0.000258128839273414,
+      "count": 10000
+    },
+    {
+      "stage": "End-to-end (SonicRetarget.infer)",
+      "mean_ms": 0.05703759120000001,
+      "median_ms": 0.056571,
+      "p95_ms": 0.060088050000000004,
+      "p99_ms": 0.062006,
+      "min_ms": 0.051098,
+      "max_ms": 0.108179,
+      "std_ms": 0.002405532644817476,
+      "count": 10000
+    }
+  ],
+  "throughput": [
+    {
+      "label": "Sequential FPS",
+      "fps": 17593.85140496659,
+      "batch_size": 1
+    },
+    {
+      "label": "Sustained FPS (10s)",
+      "fps": 15656.116745459198,
+      "batch_size": 1
+    },
+    {
+      "label": "Batch=1",
+      "fps": 17711.09112733277,
+      "batch_size": 1
+    },
+    {
+      "label": "Batch=4",
+      "fps": 17590.28210089499,
+      "batch_size": 4
+    },
+    {
+      "label": "Batch=8",
+      "fps": 17646.484700339828,
+      "batch_size": 8
+    },
+    {
+      "label": "Batch=16",
+      "fps": 17681.260132235067,
+      "batch_size": 16
+    },
+    {
+      "label": "Batch=32",
+      "fps": 17820.29142109431,
+      "batch_size": 32
+    }
+  ],
+  "pipeline": [
+    {
+      "stage": "Per-step total",
+      "mean_ms": 0.07117469300000001
+    },
+    {
+      "stage": "Input capture",
+      "mean_ms": 0.0073563334
+    },
+    {
+      "stage": "SONIC infer",
+      "mean_ms": 0.0570733249
+    },
+    {
+      "stage": "Sim step",
+      "mean_ms": 0.0046424522
+    },
+    {
+      "stage": "Proprioception update",
+      "mean_ms": 0.0015459006999999998
+    }
+  ],
+  "per_robot": [
+    {
+      "robot": "unitree_g1",
+      "dof": 29,
+      "mean_ms": 0.0631118328,
+      "fps": 15844.88923287932
+    },
+    {
+      "robot": "unitree_h1",
+      "dof": 19,
+      "mean_ms": 0.0589235731,
+      "fps": 16971.136463548915
+    },
+    {
+      "robot": "fourier_gr1t2",
+      "dof": 32,
+      "mean_ms": 0.0859947571,
+      "fps": 11628.61590314324
+    }
+  ],
+  "stability": {
+    "total": 10000,
+    "spikes": 0,
+    "spike_pct": 0.0,
+    "max_spike_ms": 0.09992,
+    "jitter_ms": 0.0017946803202702085,
+    "median_ms": 0.056602
+  },
+  "memory": {
+    "rss_before_mb": 78.015625,
+    "rss_after_mb": 78.015625,
+    "gpu_before_mb": 668.0,
+    "gpu_after_mb": 668.0,
+    "gpu_peak_mb": 668.0,
+    "gpu_total_mb": 32607.0
+  }
+}

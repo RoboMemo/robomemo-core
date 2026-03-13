@@ -1,0 +1,180 @@
+{
+  "timestamp": "2026-03-13 10:32:28",
+  "system": {
+    "gpu": "NVIDIA GeForce RTX 5090",
+    "device": "CUDA (GPU)",
+    "python": "3.10.12",
+    "numpy": "2.2.6",
+    "onnxruntime": "1.23.2",
+    "providers": [
+      "CUDAExecutionProvider",
+      "CPUExecutionProvider"
+    ],
+    "os": "Linux 6.8.0-101-generic (x86_64)"
+  },
+  "config": {
+    "iterations": 10000,
+    "warmup": 500,
+    "encoder_input_dim": 1762,
+    "encoder_output_dim": 64,
+    "decoder_input_dim": 994,
+    "decoder_output_dim": 29
+  },
+  "model_load_time_s": 0.12697151899919845,
+  "memory": {
+    "rss_before_mb": 73.90234375,
+    "rss_after_mb": 189.078125,
+    "rss_delta_mb": 115.17578125,
+    "gpu_before_mb": 668.0,
+    "gpu_after_mb": 668.0,
+    "gpu_delta_mb": 0.0,
+    "gpu_total_mb": 32607.0,
+    "gpu_peak_mb": 668.0
+  },
+  "encoder_latency": {
+    "mean_ms": 1.9429894954999996,
+    "median_ms": 1.928507,
+    "p95_ms": 2.0140605999999996,
+    "p99_ms": 2.1577251200000003,
+    "min_ms": 1.880327,
+    "max_ms": 2.894054,
+    "std_ms": 0.06160911545660414,
+    "count": 10000
+  },
+  "decoder_latency": {
+    "mean_ms": 1.444537205,
+    "median_ms": 1.43608,
+    "p95_ms": 1.48698585,
+    "p99_ms": 1.5802374100000003,
+    "min_ms": 1.39974,
+    "max_ms": 2.41267,
+    "std_ms": 0.049607551985000976,
+    "count": 10000
+  },
+  "e2e_latency": {
+    "mean_ms": 4.0722983965,
+    "median_ms": 4.055148,
+    "p95_ms": 4.17517755,
+    "p99_ms": 4.415827080000001,
+    "min_ms": 3.990652,
+    "max_ms": 5.960311,
+    "std_ms": 0.07774203343944308,
+    "count": 10000
+  },
+  "postproc_latency": {
+    "mean_ms": 0.0038323939000000002,
+    "median_ms": 0.003814,
+    "p95_ms": 0.004011,
+    "p99_ms": 0.004276030000000001,
+    "min_ms": 0.003395,
+    "max_ms": 0.006754,
+    "std_ms": 0.00017230120006195545,
+    "count": 10000
+  },
+  "total_pipeline_mean_ms": 4.0761307904,
+  "total_pipeline_p99_ms": 4.42010311,
+  "headroom_vs_50hz": 4.90661390137517,
+  "throughput": [
+    {
+      "label": "Sequential E2E",
+      "fps": 246.00529591192327
+    },
+    {
+      "label": "Encoder only",
+      "fps": 516.4607918766634
+    },
+    {
+      "label": "Decoder only",
+      "fps": 684.9350798647639
+    },
+    {
+      "label": "Sustained E2E (10s)",
+      "fps": 244.59752296067464
+    }
+  ],
+  "batch_scaling": [
+    {
+      "batch_size": 1,
+      "mean_ms": 1.9482729599999997,
+      "throughput_ips": 513.2751008359733,
+      "per_item_ms": 1.9482729599999997
+    },
+    {
+      "batch_size": 2,
+      "error": "[ONNXRuntimeError] : 2 : INVALID_ARGUMENT : Got invalid dimensions for input: obs_dict for the following indices\n index: 0 Got: 2 Expected: 1\n Please fix either the inputs/outputs or the model."
+    },
+    {
+      "batch_size": 4,
+      "error": "[ONNXRuntimeError] : 2 : INVALID_ARGUMENT : Got invalid dimensions for input: obs_dict for the following indices\n index: 0 Got: 4 Expected: 1\n Please fix either the inputs/outputs or the model."
+    },
+    {
+      "batch_size": 8,
+      "error": "[ONNXRuntimeError] : 2 : INVALID_ARGUMENT : Got invalid dimensions for input: obs_dict for the following indices\n index: 0 Got: 8 Expected: 1\n Please fix either the inputs/outputs or the model."
+    },
+    {
+      "batch_size": 16,
+      "error": "[ONNXRuntimeError] : 2 : INVALID_ARGUMENT : Got invalid dimensions for input: obs_dict for the following indices\n index: 0 Got: 16 Expected: 1\n Please fix either the inputs/outputs or the model."
+    },
+    {
+      "batch_size": 32,
+      "error": "[ONNXRuntimeError] : 2 : INVALID_ARGUMENT : Got invalid dimensions for input: obs_dict for the following indices\n index: 0 Got: 32 Expected: 1\n Please fix either the inputs/outputs or the model."
+    }
+  ],
+  "cuda_vs_cpu": [
+    {
+      "stage": "Encoder",
+      "cuda_mean_ms": 1.9307403042000002,
+      "cuda_p99_ms": 2.0884671500000005,
+      "cpu_mean_ms": 1.9412129697999998,
+      "cpu_p99_ms": 2.06096707,
+      "speedup": 1.0054241710173129
+    },
+    {
+      "stage": "Decoder",
+      "cuda_mean_ms": 1.4437633014,
+      "cuda_p99_ms": 1.5914614300000003,
+      "cpu_mean_ms": 1.4556327044,
+      "cpu_p99_ms": 1.5602034,
+      "speedup": 1.008221155772896
+    }
+  ],
+  "stability": {
+    "median_ms": 4.068194,
+    "spikes": 0,
+    "spike_pct": 0.0,
+    "max_ms": 6.157132,
+    "jitter_ms": 0.040803535443258224
+  },
+  "deployment_checks": [
+    {
+      "check": "E2E latency < 20ms (50Hz budget)",
+      "pass": true,
+      "detail": "P99=4.42ms"
+    },
+    {
+      "check": "E2E latency < 10ms (100Hz budget)",
+      "pass": true,
+      "detail": "P99=4.42ms"
+    },
+    {
+      "check": "E2E latency < 2ms (500Hz budget)",
+      "pass": false,
+      "detail": "P99=4.42ms"
+    },
+    {
+      "check": "No spikes > 2x median",
+      "pass": true,
+      "detail": "0 spikes"
+    },
+    {
+      "check": "Jitter < 1ms",
+      "pass": true,
+      "detail": "0.0408ms"
+    },
+    {
+      "check": "GPU memory < 1GB",
+      "pass": true,
+      "detail": "+0MB"
+    }
+  ]
+}
