@@ -1,0 +1,197 @@
+# RoboForce — Robot Configuration
+# ================================
+# Placeholder articulation parameters for the RoboForce mobile manipulator.
+# The actual robot USD would replace this, but this defines the kinematic
+# structure and joint limits for the placeholder.
+
+robot:
+  name: "RoboForce"
+  description: >
+    Tracked mobile manipulator with dual 7-DOF arms,
+    head-mounted sensors, and screw-driving end-effector.
+
+  # Base (tracked platform modeled as prismatic + revolute)
+  base:
+    type: "tracked"
+    joints:
+      - name: "base_x"
+        type: "prismatic"
+        axis: "X"
+        limits: [-10.0, 10.0]       # meters
+        max_velocity: 1.0            # m/s
+        max_force: 500.0             # N
+        damping: 100.0
+        stiffness: 0.0
+
+      - name: "base_y"
+        type: "prismatic"
+        axis: "Y"
+        limits: [-10.0, 10.0]
+        max_velocity: 1.0
+        max_force: 500.0
+        damping: 100.0
+        stiffness: 0.0
+
+      - name: "base_yaw"
+        type: "revolute"
+        axis: "Z"
+        limits: [-3.14159, 3.14159]  # radians (±180°)
+        max_velocity: 1.5            # rad/s
+        max_torque: 200.0            # N·m
+        damping: 50.0
+        stiffness: 0.0
+
+    # Physical properties
+    mass: 120.0                       # kg (tracked base + battery)
+    dimensions: [0.8, 0.6, 0.4]      # L × W × H (meters)
+    track_width: 0.5                  # meters
+    ground_clearance: 0.08            # meters
+
+  # Right arm (primary manipulation arm)
+  right_arm:
+    type: "serial"
+    num_dof: 7
+    joints:
+      - name: "right_shoulder_pan"
+        type: "revolute"
+        axis: "Z"
+        limits: [-2.87, 2.87]
+        max_velocity: 2.175
+        max_torque: 87.0
+        damping: 10.0
+        stiffness: 0.0
+
+      - name: "right_shoulder_lift"
+        type: "revolute"
+        axis: "Y"
+        limits: [-1.92, 1.22]
+        max_velocity: 2.175
+        max_torque: 87.0
+        damping: 10.0
+        stiffness: 0.0
+
+      - name: "right_elbow"
+        type: "revolute"
+        axis: "Y"
+        limits: [-2.79, 2.79]
+        max_velocity: 2.175
+        max_torque: 40.0
+        damping: 5.0
+        stiffness: 0.0
+
+      - name: "right_wrist_1"
+        type: "revolute"
+        axis: "Y"
+        limits: [-3.05, 3.05]
+        max_velocity: 3.0
+        max_torque: 12.0
+        damping: 2.0
+        stiffness: 0.0
+
+      - name: "right_wrist_2"
+        type: "revolute"
+        axis: "Z"
+        limits: [-3.05, 3.05]
+        max_velocity: 3.0
+        max_torque: 12.0
+        damping: 2.0
+        stiffness: 0.0
+
+      - name: "right_wrist_3"
+        type: "revolute"
+        axis: "Y"
+        limits: [-3.05, 3.05]
+        max_velocity: 3.0
+        max_torque: 12.0
+        damping: 2.0
+        stiffness: 0.0
+
+      - name: "right_wrist_roll"
+        type: "revolute"
+        axis: "Z"
+        limits: [-6.28, 6.28]         # Full rotation
+        max_velocity: 3.5
+        max_torque: 8.0
+        damping: 1.0
+        stiffness: 0.0
+
+    # DH-like parameters (simplified)
+    link_lengths: [0.0, 0.3, 0.25, 0.0, 0.0, 0.0, 0.08]
+    link_masses: [3.0, 3.5, 2.0, 1.2, 1.0, 0.8, 0.5]
+
+  # Left arm (support arm — same kinematics, mirrored)
+  left_arm:
+    type: "serial"
+    num_dof: 7
+    mirror_of: "right_arm"
+    shoulder_offset: [0.0, 0.15, 0.0]  # Relative to torso
+
+  # Screw driving end-effector
+  end_effector:
+    type: "screw_driver"
+    joints:
+      - name: "screw_driver_rotation"
+        type: "revolute"
+        axis: "Z"
+        limits: [-100.0, 100.0]       # Continuous rotation (many turns)
+        max_velocity: 31.4            # ~300 RPM
+        max_torque: 25.0              # N·m
+        damping: 0.5
+        stiffness: 0.0
+
+    # Socket specifications
+    socket_type: "hex"                 # Default socket type
+    socket_sizes: ["M4", "M5", "M6", "M8", "M10"]  # Available socket adapters
+    engagement_depth: 0.01             # meters — how far screw head inserts
+
+    # Force/torque sensor at EE
+    force_torque_sensor:
+      enabled: true
+      frame: "right_ee_link"
+      noise_std: [0.1, 0.1, 0.1, 0.005, 0.005, 0.005]  # [Fx,Fy,Fz,Tx,Ty,Tz]
+      range: [100.0, 100.0, 200.0, 25.0, 25.0, 25.0]    # Max measurable
+
+  # Head (camera mount)
+  head:
+    type: "pan_tilt"
+    joints:
+      - name: "head_pan"
+        type: "revolute"
+        axis: "Z"
+        limits: [-1.57, 1.57]
+        max_velocity: 2.0
+        max_torque: 5.0
+        damping: 2.0
+        stiffness: 0.0
+
+      - name: "head_tilt"
+        type: "revolute"
+        axis: "Y"
+        limits: [-0.78, 0.78]         # ±45°
+        max_velocity: 2.0
+        max_torque: 5.0
+        damping: 2.0
+        stiffness: 0.0
+
+    height_from_base: 1.8              # meters
+    camera_mount_offset: [0.05, 0.0, 0.0]
+
+# Physical body (torso connecting base to arms and head)
+torso:
+  height: 0.6                          # meters (from base top to shoulder)
+  width: 0.4
+  depth: 0.3
+  mass: 25.0                           # kg
+
+# Total robot
+total_dof: 20                          # 3 base + 7 right + 7 left + 1 EE + 2 head
+total_mass: 180.0                      # kg (approximate)
+
+# Controller defaults
+controller:
+  type: "operational_space"            # OSC for EE control
+  position_gain: 150.0
+  orientation_gain: 150.0
+  damping_ratio: 1.0                   # Critically damped
+  nullspace_stiffness: 10.0
+  use_gravity_compensation: true

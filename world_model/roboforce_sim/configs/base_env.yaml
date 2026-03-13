@@ -1,0 +1,129 @@
+# RoboForce — Base Environment Configuration
+# ============================================
+# Default settings for the solar panel screw installation environment.
+
+# Simulation parameters
+sim:
+  dt: 0.005                    # Physics timestep (200 Hz)
+  substeps: 2                  # Physics substeps per step
+  gravity: [0.0, 0.0, -9.81]  # Gravity vector (m/s²)
+  device: "cuda:0"             # Simulation device
+  use_gpu_pipeline: true       # Enable GPU pipeline for parallel envs
+
+# Environment
+env:
+  num_envs: 64                 # Number of parallel environments
+  env_spacing: 5.0             # Spacing between env origins (meters)
+  episode_length_s: 60.0       # Max episode duration (seconds)
+
+# Scene
+scene:
+  # Ground
+  terrain:
+    size: [20.0, 20.0]         # Terrain XY extent (meters)
+    resolution: 64             # Height field resolution
+    max_height: 0.3            # Max dune height (meters)
+    friction: 0.8
+
+  # Solar panel rack
+  solar_rack:
+    panel_width: 2.0           # meters
+    panel_height: 1.0          # meters
+    panel_tilt_deg: 30.0       # degrees from horizontal
+    num_brackets_per_side: 3
+    screws_per_bracket: 2
+    position: [0.0, -1.0, 0.0] # Rack world position
+
+  # Screws
+  screws:
+    type: "hex"                # hex | phillips | flathead | torx
+    metric_size: "M6"          # M3 | M4 | M5 | M6 | M8 | M10 | M12
+    target_turns: 8.0
+    target_torque_nm: 10.0
+
+# Robot
+robot:
+  usd_path: ""                # Path to robot USD (empty = use placeholder)
+  initial_joint_positions:
+    # Base: x, y, yaw
+    base_x: 0.0
+    base_y: 1.0
+    base_yaw: 0.0
+    # Right arm (7 joints)
+    right_arm: [0.0, -0.785, 0.0, -2.356, 0.0, 1.571, 0.785]
+    # Screw driver EE
+    screw_driver_angle: 0.0
+  end_effector:
+    link_name: "right_ee_link"
+    max_force_n: 50.0          # Max applied force (N)
+    max_torque_nm: 25.0        # Max applied torque (N·m)
+    screw_rpm: 300.0           # Screw driving speed (RPM)
+
+# Cameras
+cameras:
+  head_rgb:
+    width: 640
+    height: 480
+    fov_deg: 60.0
+    position: [0.0, 0.0, 1.8]  # Head-mounted
+    orientation_deg: [0.0, -15.0, 0.0]  # Slightly downward
+  head_depth:
+    width: 640
+    height: 480
+    fov_deg: 60.0
+    position: [0.0, 0.0, 1.8]
+    orientation_deg: [0.0, -15.0, 0.0]
+
+# Observations
+observations:
+  policy:
+    - joint_positions           # All joint angles
+    - joint_velocities          # All joint velocities
+    - ee_position               # End-effector XYZ
+    - ee_orientation             # End-effector quaternion
+    - ee_force_torque           # 6D force/torque at EE
+    - screw_relative_position   # Vector from EE to target screw
+    - screw_rotation_progress   # How far the screw is driven (0-1)
+  images:
+    - head_rgb
+    - head_depth
+
+# Actions
+actions:
+  space_dim: 8                 # 6D delta pose + 1D screw rotation + 1D gripper
+  ee_delta_position_scale: 0.01  # Max position delta per step (meters)
+  ee_delta_orientation_scale: 0.05  # Max orientation delta per step (radians)
+  screw_rotation_scale: 0.5    # Max screw rotation per step (radians)
+  gripper_scale: 1.0           # Gripper open/close
+
+# Rewards (weights)
+rewards:
+  approach:
+    weight: 1.0
+    distance_threshold: 0.05   # meters — within this, full reward
+  contact:
+    weight: 2.0
+  screw_driving:
+    weight: 5.0
+    progress_scale: 10.0       # Reward per unit rotation progress
+  completion:
+    weight: 100.0              # Bonus for fully tightened screw
+  force_penalty:
+    weight: -0.1
+    force_threshold: 40.0      # N — penalize above this
+  collision_penalty:
+    weight: -10.0
+
+# Termination
+terminations:
+  success: true                # Terminate on screw completion
+  timeout: true                # Terminate at episode_length_s
+  collision_damage: true       # Terminate on excessive collision
+  max_collision_force: 100.0   # N — collision termination threshold
+
+# Domain randomization (default: minimal)
+domain_randomization:
+  enabled: false
+  screw_position_noise: 0.005  # meters
+  lighting_variation: false
+  camera_noise: false
