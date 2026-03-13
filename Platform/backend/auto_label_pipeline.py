@@ -6,6 +6,7 @@ Pipeline: Video → Phase Segmentation → Action Primitive Labeling → Mechani
 
 Usage:
     python auto_label_pipeline.py <video_path> [--model MODEL] [--ollama-url URL] [--output OUTPUT] [--num-frames N]
+                                               [--adaptive] [--no-adaptive] [--max-vlm-frames N] [--motion-threshold F]
 """
 
 import sys
@@ -50,10 +51,16 @@ class AutoLabelPipeline:
         model: str = "scomper/minicpm-v2.5:latest",
         ollama_url: str = "http://localhost:11434",
         num_frames: int = 16,
+        adaptive: bool = True,
+        max_vlm_frames: int = 24,
+        motion_threshold: float = 0.02,
     ):
         self.model = model
         self.ollama_url = ollama_url.rstrip("/")
         self.num_frames = num_frames
+        self.adaptive = adaptive
+        self.max_vlm_frames = max_vlm_frames
+        self.motion_threshold = motion_threshold
 
     # ── Frame Extraction ─────────────────────────────────────────────────
 
@@ -106,6 +113,158 @@ class AutoLabelPipeline:
             "total_frames": total,
         }
         return frames, frame_metas, video_info
+
+    # ── Motion-Adaptive Frame Extraction ────────────────────────────────
+
+    def extract_adaptive_frames(
+        self, video_path: str, max_vlm_frames: int = 24, motion_threshold: float = 0.02
+    ) -> tuple:
+        """Extract frames using motion-adaptive sampling (2-pass).
+
+        Pass 1: Compute per-frame motion scores via frame differencing, find peaks.
+        Pass 2: Dense-sample around key frames, cap at max_vlm_frames.
+
+        Returns (frames_b64, frame_metas, video_info) — same format as extract_frames(),
+        but frame_metas entries include an additional "motion_score" field.
+        """
+        cap = cv2.VideoCapture(video_path)
+        if not cap.isOpened():
+            raise ValueError(f"Cannot open video: {video_path}")
+
+        total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        duration = total / fps
+
+        video_info = {
+            "duration": round(duration, 2),
+            "fps": round(fps, 2),
+            "resolution": [width, height],
+            "total_frames": total,
+        }
+
+        # ── Pass 1: compute motion scores ────────────────────────────
+        # Read every frame as grayscale and compute absolute difference
+        # For very long videos, subsample at ~5 fps to keep it fast
+        subsample = max(1, int(fps / 5))
+        motion_raw: List[tuple] = []  # (frame_idx, score)
+        prev_gray = None
+
+        for fi in range(0, total, subsample):
+            cap.set(cv2.CAP_PROP_POS_FRAMES, fi)
+            ret, frame = cap.read()
+            if not ret:
+                break
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            # Downsample for speed
+            gray = cv2.resize(gray, (160, 120))
+            if prev_gray is not None:
+                diff = cv2.absdiff(gray, prev_gray)
+                score = float(np.mean(diff) / 255.0)  # normalise to 0-1
+            else:
+                score = 0.0
+            motion_raw.append((fi, score))
+            prev_gray = gray
+
+        if len(motion_raw) < 2:
+            cap.release()
+            log("Motion analysis: too few frames, falling back to uniform sampling")
+            return self.extract_frames(video_path, max_vlm_frames)
+
+        indices_arr = np.array([m[0] for m in motion_raw])
+        scores_arr = np.array([m[1] for m in motion_raw])
+
+        # Smooth with sliding window (size 5)
+        kernel_size = min(5, len(scores_arr))
+        kernel = np.ones(kernel_size) / kernel_size
+        scores_smooth = np.convolve(scores_arr, kernel, mode="same")
+
+        # Find peaks: local maxima above threshold
+        key_indices: List[int] = []
+        for i in range(1, len(scores_smooth) - 1):
+            if (scores_smooth[i] > scores_smooth[i - 1]
+                    and scores_smooth[i] > scores_smooth[i + 1]
+                    and scores_smooth[i] >= motion_threshold):
+                key_indices.append(i)
+
+        # Also detect motion plateaus: sustained above threshold
+        in_plateau = False
+        plateau_start = 0
+        for i, s in enumerate(scores_smooth):
+            if s >= motion_threshold and not in_plateau:
+                in_plateau = True
+                plateau_start = i
+            elif s < motion_threshold and in_plateau:
+                in_plateau = False
+                mid = (plateau_start + i) // 2
+                if mid not in key_indices:
+                    key_indices.append(mid)
+        # Handle plateau that runs to the end
+        if in_plateau:
+            mid = (plateau_start + len(scores_smooth) - 1) // 2
+            if mid not in key_indices:
+                key_indices.append(mid)
+
+        # Always include first and last sampled frame
+        if 0 not in key_indices:
+            key_indices.insert(0, 0)
+        last_idx = len(scores_smooth) - 1
+        if last_idx not in key_indices:
+            key_indices.append(last_idx)
+
+        key_indices = sorted(set(key_indices))
+
+        log(f"Motion analysis: {len(key_indices)} key frames detected from {total} total frames")
+
+        # ── Pass 2: dense sample around key frames ───────────────────
+        context_n = 3  # ±N frames around each key frame (in subsampled space)
+        candidate_set: set = set()
+        for ki in key_indices:
+            for offset in range(-context_n, context_n + 1):
+                ci = ki + offset
+                if 0 <= ci < len(indices_arr):
+                    candidate_set.add(ci)
+
+        candidates = sorted(candidate_set)
+
+        # If too many, keep highest-motion-score ones
+        if len(candidates) > max_vlm_frames:
+            scored = [(c, scores_smooth[c]) for c in candidates]
+            # Always keep first and last
+            first, last = scored[0], scored[-1]
+            middle = sorted(scored[1:-1], key=lambda x: x[1], reverse=True)
+            selected = [first] + middle[:max_vlm_frames - 2] + [last]
+            candidates = sorted(set(s[0] for s in selected))
+
+        # Map back to actual frame indices and read frames
+        selected_frame_indices = [int(indices_arr[c]) for c in candidates]
+        selected_scores = [float(scores_smooth[c]) for c in candidates]
+
+        log(f"Motion analysis: selected {len(selected_frame_indices)} frames for VLM")
+
+        frames_b64 = []
+        frame_metas = []
+        for fi, score in zip(selected_frame_indices, selected_scores):
+            cap.set(cv2.CAP_PROP_POS_FRAMES, fi)
+            ret, frame = cap.read()
+            if not ret:
+                continue
+            h, w = frame.shape[:2]
+            scale = min(512 / max(h, w), 1.0)
+            if scale < 1.0:
+                frame = cv2.resize(frame, (int(w * scale), int(h * scale)))
+            _, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
+            b64 = base64.b64encode(buf).decode("ascii")
+            frames_b64.append(b64)
+            frame_metas.append({
+                "frame_idx": fi,
+                "timestamp": round(fi / fps, 3),
+                "motion_score": round(score, 4),
+            })
+
+        cap.release()
+        return frames_b64, frame_metas, video_info
 
     # ── Ollama VLM Call ──────────────────────────────────────────────────
 
@@ -177,8 +336,14 @@ class AutoLabelPipeline:
         self, video_path: str
     ) -> tuple:
         """Segment video into temporal phases."""
-        log(f"[Stage 1] Extracting {self.num_frames} frames for phase segmentation...")
-        frames, frame_metas, video_info = self.extract_frames(video_path, self.num_frames)
+        if self.adaptive:
+            log(f"[Stage 1] Using motion-adaptive sampling (max {self.max_vlm_frames} frames, threshold={self.motion_threshold})...")
+            frames, frame_metas, video_info = self.extract_adaptive_frames(
+                video_path, self.max_vlm_frames, self.motion_threshold
+            )
+        else:
+            log(f"[Stage 1] Extracting {self.num_frames} frames for phase segmentation...")
+            frames, frame_metas, video_info = self.extract_frames(video_path, self.num_frames)
         log(f"[Stage 1] Got {len(frames)} frames, sending to VLM...")
 
         ts_context = ", ".join(
@@ -189,9 +354,20 @@ class AutoLabelPipeline:
         # Step 1a: describe each frame individually to avoid VLM hallucinating from examples
         frame_descs = []
         for idx, (fr, meta) in enumerate(zip(frames, frame_metas)):
+            # Add motion context if available (adaptive mode)
+            motion_ctx = ""
+            ms = meta.get("motion_score")
+            if ms is not None:
+                if ms > 0.1:
+                    motion_ctx = " (high motion — likely action transition)"
+                elif ms > 0.03:
+                    motion_ctx = " (moderate motion — active manipulation)"
+                else:
+                    motion_ctx = " (low motion — stable pose)"
+
             desc_prompt = (
                 f"This is frame {idx+1} of {len(frames)} from a robot manipulation video "
-                f"(timestamp {meta['timestamp']:.1f}s). "
+                f"(timestamp {meta['timestamp']:.1f}s){motion_ctx}. "
                 "In one sentence, describe ONLY what the robot arm and gripper are doing RIGHT NOW. "
                 "Be specific: mention arm position, gripper state (open/closing/closed), and any object contact. "
                 "Do NOT guess future actions."
@@ -418,7 +594,11 @@ Return ONLY the summary sentence, no quotes or extra text."""
         log(f"Video: {video_path}")
         log(f"Model: {self.model}")
         log(f"Ollama: {self.ollama_url}")
-        log(f"Frames: {self.num_frames}")
+        log(f"Adaptive: {self.adaptive}")
+        if self.adaptive:
+            log(f"Max VLM frames: {self.max_vlm_frames}, Motion threshold: {self.motion_threshold}")
+        else:
+            log(f"Frames: {self.num_frames}")
 
         # Stage 1
         phases, video_info = self.stage1_phase_segmentation(video_path)
@@ -481,9 +661,16 @@ def main():
     parser.add_argument("--model", default="scomper/minicpm-v2.5:latest", help="Ollama model name")
     parser.add_argument("--ollama-url", default="http://localhost:11434", help="Ollama API URL")
     parser.add_argument("--output", default=None, help="Output JSONL file path (default: stdout)")
-    parser.add_argument("--num-frames", type=int, default=16, help="Number of frames for segmentation")
+    parser.add_argument("--num-frames", type=int, default=16, help="Number of frames for segmentation (used when --no-adaptive)")
+    parser.add_argument("--adaptive", action="store_true", default=True, help="Use motion-adaptive frame sampling (default: True)")
+    parser.add_argument("--no-adaptive", action="store_true", default=False, help="Disable adaptive sampling, use uniform frames")
+    parser.add_argument("--max-vlm-frames", type=int, default=24, help="Max frames sent to VLM in adaptive mode (default: 24)")
+    parser.add_argument("--motion-threshold", type=float, default=0.02, help="Motion detection sensitivity 0.0-1.0 (default: 0.02)")
 
     args = parser.parse_args()
+
+    # --no-adaptive overrides --adaptive
+    adaptive = args.adaptive and not args.no_adaptive
 
     if not Path(args.video_path).exists():
         print(f"ERROR: Video not found: {args.video_path}", file=sys.stderr)
@@ -493,6 +680,9 @@ def main():
         model=args.model,
         ollama_url=args.ollama_url,
         num_frames=args.num_frames,
+        adaptive=adaptive,
+        max_vlm_frames=args.max_vlm_frames,
+        motion_threshold=args.motion_threshold,
     )
 
     try:
