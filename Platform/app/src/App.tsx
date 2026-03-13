@@ -45,11 +45,13 @@ import QualityControl from '@/sections/QualityControl';
 import OrderManagement from '@/sections/OrderManagement';
 import BatchOperations from '@/sections/BatchOperations';
 import RoboForceIntegration from '@/sections/RoboForceIntegration';
-import BillingManagement from '@/sections/BillingManagement';import api from '@/services/api';
+import BillingManagement from '@/sections/BillingManagement';
+import AutoLabelPipeline from '@/sections/AutoLabelPipeline';
+import api from '@/services/api';
 import type { User } from '@/types';
 import './App.css';
 
-type Tab = 'datasets' | 'collection' | 'annotation' | 'visualization' | 'simulators' | 'augmentation' | 'autoannotation' | 'structuredvqa' | 'stats' | 'users' | 'mytasks' | 'tasks' | 'quality' | 'orders' | 'batch' | 'roboforce' | 'billing';
+type Tab = 'datasets' | 'collection' | 'annotation' | 'visualization' | 'simulators' | 'augmentation' | 'autoannotation' | 'structuredvqa' | 'autolabel' | 'stats' | 'users' | 'mytasks' | 'tasks' | 'quality' | 'orders' | 'batch' | 'roboforce' | 'billing';
 
 const tabs = [
   { id: 'datasets' as Tab, label: 'Datasets', icon: Database },
@@ -57,6 +59,7 @@ const tabs = [
   { id: 'annotation' as Tab, label: 'Annotation', icon: Tag },
   { id: 'autoannotation' as Tab, label: 'Auto-Annotation', icon: Wand2 },
   { id: 'structuredvqa' as Tab, label: 'Structured VQA', icon: BrainCircuit },
+  { id: 'autolabel' as Tab, label: 'Auto Label', icon: Wand2 },
   { id: 'visualization' as Tab, label: 'Visualization', icon: BarChart3 },
   { id: 'simulators' as Tab, label: 'Simulators', icon: Cpu },
   { id: 'augmentation' as Tab, label: 'Augmentation', icon: Sparkles },
@@ -148,6 +151,8 @@ function App() {
         return <AutoAnnotation />;
       case 'structuredvqa':
         return <StructuredVQA />;
+      case 'autolabel':
+        return <AutoLabelPipeline />;
       case 'stats':
         return <PlatformStats />;
       case 'mytasks':

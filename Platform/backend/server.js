@@ -1041,6 +1041,168 @@ app.get('/api/vlm/models', async (req, res) => {
 
 // ========== END STRUCTURED VQA ANALYSIS API ==========
 
+// ========== AUTO-LABEL PIPELINE API ==========
+
+const autoLabelJobs = {};
+const autoLabelResults = [];
+
+// POST /api/auto-label/run — Run full pipeline on a video
+app.post('/api/auto-label/run', authMiddleware, (req, res) => {
+  const { videoPath, model, ollamaUrl, numFrames } = req.body;
+  if (!videoPath) {
+    return res.status(400).json({ error: 'videoPath is required' });
+  }
+
+  const jobId = `autolabel_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+  const pythonExecutable = path.join(__dirname, 'venv', 'bin', 'python3');
+  const scriptPath = path.join(__dirname, 'auto_label_pipeline.py');
+
+  // Resolve video path relative to backend dir if not absolute
+  let resolvedVideoPath = videoPath;
+  if (!path.isAbsolute(videoPath)) {
+    resolvedVideoPath = path.join(__dirname, videoPath);
+  }
+
+  const args = [scriptPath, resolvedVideoPath];
+  if (model) { args.push('--model', model); }
+  if (ollamaUrl) { args.push('--ollama-url', ollamaUrl); }
+  if (numFrames) { args.push('--num-frames', String(numFrames)); }
+
+  autoLabelJobs[jobId] = {
+    id: jobId,
+    status: 'processing',
+    videoPath: resolvedVideoPath,
+    model: model || 'scomper/minicpm-v2.5:latest',
+    createdAt: new Date().toISOString(),
+    progress: 0,
+    logs: [],
+  };
+
+  let stdout = '';
+  let stderr = '';
+
+  const proc = spawn(pythonExecutable, args);
+
+  proc.stdout.on('data', (data) => {
+    stdout += data.toString();
+  });
+
+  proc.stderr.on('data', (data) => {
+    const line = data.toString().trim();
+    stderr += line + '\n';
+    autoLabelJobs[jobId].logs.push(line);
+    // Parse stage progress from log lines
+    if (line.includes('[Stage 1]')) autoLabelJobs[jobId].progress = 10;
+    else if (line.includes('[Stage 2]')) autoLabelJobs[jobId].progress = 30;
+    else if (line.includes('[Stage 3]')) autoLabelJobs[jobId].progress = 60;
+    else if (line.includes('[Stage 4]')) autoLabelJobs[jobId].progress = 80;
+    else if (line.includes('Pipeline Complete')) autoLabelJobs[jobId].progress = 100;
+  });
+
+  proc.on('close', (code) => {
+    if (code === 0 && stdout.trim()) {
+      try {
+        const result = JSON.parse(stdout.trim());
+        autoLabelJobs[jobId].status = 'completed';
+        autoLabelJobs[jobId].progress = 100;
+        autoLabelJobs[jobId].result = result;
+        autoLabelResults.push(result);
+      } catch (e) {
+        autoLabelJobs[jobId].status = 'failed';
+        autoLabelJobs[jobId].error = `Failed to parse result: ${e.message}`;
+      }
+    } else {
+      autoLabelJobs[jobId].status = 'failed';
+      autoLabelJobs[jobId].error = stderr || `Process exited with code ${code}`;
+    }
+    autoLabelJobs[jobId].completedAt = new Date().toISOString();
+  });
+
+  proc.on('error', (err) => {
+    autoLabelJobs[jobId].status = 'failed';
+    autoLabelJobs[jobId].error = `Failed to spawn process: ${err.message}`;
+    autoLabelJobs[jobId].completedAt = new Date().toISOString();
+  });
+
+  res.json({ jobId, status: 'processing' });
+});
+
+// GET /api/auto-label/jobs/:jobId — Get job status/result
+app.get('/api/auto-label/jobs/:jobId', authMiddleware, (req, res) => {
+  const job = autoLabelJobs[req.params.jobId];
+  if (!job) return res.status(404).json({ error: 'Job not found' });
+  res.json(job);
+});
+
+// GET /api/auto-label/results — List all labeled episodes
+app.get('/api/auto-label/results', authMiddleware, (req, res) => {
+  res.json(autoLabelResults);
+});
+
+// POST /api/auto-label/export-lerobot — Export labels to LeRobot format
+app.post('/api/auto-label/export-lerobot', authMiddleware, (req, res) => {
+  const { episodeIds, outputDir, robotType } = req.body;
+  if (!outputDir) {
+    return res.status(400).json({ error: 'outputDir is required' });
+  }
+
+  // Filter results by episodeIds if provided
+  let episodes = autoLabelResults;
+  if (episodeIds && Array.isArray(episodeIds) && episodeIds.length > 0) {
+    episodes = autoLabelResults.filter(r => episodeIds.includes(r.episode_id));
+  }
+  if (episodes.length === 0) {
+    return res.status(400).json({ error: 'No labeled episodes found' });
+  }
+
+  // Write episodes to a temp JSONL file
+  const tempJsonl = path.join(__dirname, `temp_export_${Date.now()}.jsonl`);
+  const fs = require('fs');
+  fs.writeFileSync(tempJsonl, episodes.map(e => JSON.stringify(e)).join('\n') + '\n');
+
+  const pythonExecutable = path.join(__dirname, 'venv', 'bin', 'python3');
+  const scriptPath = path.join(__dirname, 'lerobot_exporter.py');
+
+  let resolvedOutputDir = outputDir;
+  if (!path.isAbsolute(outputDir)) {
+    resolvedOutputDir = path.join(__dirname, outputDir);
+  }
+
+  const args = [scriptPath, tempJsonl, '--output-dir', resolvedOutputDir];
+  if (robotType) { args.push('--robot-type', robotType); }
+
+  let stdout = '';
+  let stderr = '';
+
+  const proc = spawn(pythonExecutable, args);
+
+  proc.stdout.on('data', (data) => { stdout += data.toString(); });
+  proc.stderr.on('data', (data) => { stderr += data.toString(); });
+
+  proc.on('close', (code) => {
+    // Clean up temp file
+    try { fs.unlinkSync(tempJsonl); } catch (_) {}
+
+    if (code === 0 && stdout.trim()) {
+      try {
+        const result = JSON.parse(stdout.trim());
+        res.json({ success: true, ...result });
+      } catch (e) {
+        res.json({ success: true, message: 'Export completed', outputDir: resolvedOutputDir });
+      }
+    } else {
+      res.status(500).json({ error: stderr || `Export failed with code ${code}` });
+    }
+  });
+
+  proc.on('error', (err) => {
+    try { fs.unlinkSync(tempJsonl); } catch (_) {}
+    res.status(500).json({ error: `Failed to spawn export process: ${err.message}` });
+  });
+});
+
+// ========== END AUTO-LABEL PIPELINE API ==========
+
 // ─── DB management endpoints ──────────────────────────────────────────────────
 /** POST /api/db/sync — re-import datasets/episodes/annotations from JSON files
  *  (run after download_data.py generates new data) */
