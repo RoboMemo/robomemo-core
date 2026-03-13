@@ -1,12 +1,14 @@
 """
-Isaac Lab simulation environment wrapper for the Unitree G1.
+Isaac Lab simulation environment wrapper for humanoid robots.
 
 Provides two backends:
-  1. IsaacLabEnv — Full Isaac Lab / Isaac Sim physics (requires Isaac Sim installed)
+  1. IsaacLabEnv — Full Isaac Lab / Isaac Sim physics (requires Isaac Sim 4.5+)
   2. MockPhysicsEnv — Lightweight numpy-based physics for testing without Isaac Sim
 
+Supported robots: Unitree G1 (29 DOF), Unitree H1 (19 DOF), Fourier GR1T2 (32 DOF)
+
 Both backends:
-  - Accept joint target positions (29D)
+  - Accept joint target positions (N-D, depends on robot)
   - Apply PD control
   - Return joint states (position + velocity)
   - Provide optional visualisation
@@ -135,49 +137,69 @@ class MockPhysicsEnv(SimEnv):
 
 # ── Isaac Lab environment (requires Isaac Sim) ────────────────
 
-class IsaacLabEnv(SimEnv):
-    """Full Isaac Lab DirectRLEnv wrapper for Unitree G1.
+# Robot config class mapping for Isaac Lab 2.x
+_ISAAC_ROBOT_CONFIGS = {
+    "unitree_g1": ("isaaclab_assets.robots.unitree", "G1_29DOF_CFG"),
+    "unitree_h1": ("isaaclab_assets.robots.unitree", "H1_CFG"),
+    "fourier_gr1t2": ("isaaclab_assets.robots.fourier", "GR1T2_CFG"),
+}
 
-    Requires Isaac Sim 4.5+ and Isaac Lab 2.3+ installed.
+
+class IsaacLabEnv(SimEnv):
+    """Full Isaac Lab physics environment for humanoid robots.
+
+    Requires Isaac Sim 4.5+ and Isaac Lab 2.x installed.
+    Supports: Unitree G1, Unitree H1, Fourier GR1T2.
     """
 
     def __init__(self):
-        self._env = None
+        self._sim = None
+        self._robot = None
         self._num_joints = 29
         self._step_count = 0
+        self._robot_type = "unitree_g1"
 
     def init(self, cfg: dict) -> None:
         try:
-            # Isaac Lab imports (only available when Isaac Sim is running)
-            import torch
-            from omni.isaac.lab.envs import DirectRLEnvCfg
-            from omni.isaac.lab.scene import InteractiveSceneCfg
-            from omni.isaac.lab.sim import SimulationCfg
-            from omni.isaac.lab.utils import configclass
+            import torch  # noqa: F401
+            from isaacsim import SimulationApp
         except ImportError as e:
             raise ImportError(
-                f"Isaac Lab not available: {e}\n"
-                "Install Isaac Sim 4.5+ and Isaac Lab 2.3+ first.\n"
-                "See: https://isaac-sim.github.io/IsaacLab/main/source/setup/installation/index.html"
+                f"Isaac Sim not available: {e}\n"
+                "Install: pip install 'isaacsim==4.5.0.0' "
+                "'isaacsim-extscache-physics==4.5.0.0' "
+                "'isaacsim-extscache-kit-sdk==4.5.0.0' "
+                "--extra-index-url https://pypi.nvidia.com"
             ) from e
 
         isaac_cfg = cfg["simulation"]["isaac_lab"]
-        robot_type = cfg["robot"]["type"]
-        robot_cfg = cfg["robot"][robot_type]
+        self._robot_type = cfg["robot"]["type"]
+        robot_cfg = cfg["robot"][self._robot_type]
         self._num_joints = robot_cfg.get("num_joints", 29)
 
-        # TODO: Create proper DirectRLEnv subclass with robot USD asset
-        # For now, initialise Isaac Sim and load basic scene
-        logger.info(f"IsaacLabEnv: Initialising Isaac Sim scene for {robot_type}…")
+        # Launch Isaac Sim headless or with GUI
+        headless = isaac_cfg.get("headless", True)
+        logger.info(f"IsaacLabEnv: Launching SimulationApp (headless={headless})…")
+        self._simulation_app = SimulationApp({"headless": headless})
 
         try:
-            from omni.isaac.lab.app import AppLauncher
-            launcher = AppLauncher(headless=isaac_cfg.get("headless", False))
-            simulation_app = launcher.app
-
+            import importlib
             import omni.isaac.lab.sim as sim_utils
-            from omni.isaac.lab.assets import ArticulationCfg, Articulation
-            from omni.isaac.lab_assets.unitree import G1_29DOF_CFG
+            from omni.isaac.lab.sim import SimulationCfg, SimulationContext
+            from omni.isaac.lab.assets import Articulation
+            from omni.isaac.lab.scene import InteractiveScene, InteractiveSceneCfg
+            from omni.isaac.lab.utils import configclass
+
+            # Dynamically load robot config from isaaclab_assets
+            if self._robot_type not in _ISAAC_ROBOT_CONFIGS:
+                raise ValueError(
+                    f"No Isaac Lab asset config for robot '{self._robot_type}'. "
+                    f"Available: {list(_ISAAC_ROBOT_CONFIGS.keys())}"
+                )
+            module_path, cfg_name = _ISAAC_ROBOT_CONFIGS[self._robot_type]
+            mod = importlib.import_module(module_path)
+            robot_asset_cfg = getattr(mod, cfg_name)
+            logger.info(f"IsaacLabEnv: Loaded {cfg_name} from {module_path}")
 
             # Create simulation context
             sim_cfg = SimulationCfg(
@@ -185,27 +207,49 @@ class IsaacLabEnv(SimEnv):
                 render_interval=isaac_cfg.get("render_interval", 2),
                 device="cuda:0" if isaac_cfg.get("gpu_physics", True) else "cpu",
             )
+            self._sim = SimulationContext(sim_cfg)
+            self._sim.set_camera_view([2.5, 2.5, 2.0], [0.0, 0.0, 0.8])
 
-            # Spawn G1 robot
-            robot_cfg_isaac = G1_29DOF_CFG.replace(prim_path="/World/G1")
-            self._robot = Articulation(robot_cfg_isaac)
+            # Spawn ground plane
+            ground_cfg = sim_utils.GroundPlaneCfg()
+            ground_cfg.func("/World/ground", ground_cfg)
 
-            # Build scene
-            sim = sim_utils.SimulationContext(sim_cfg)
-            sim.set_camera_view([2.0, 0, 1.5], [0, 0, 0.8])
+            # Spawn robot
+            robot_cfg_spawned = robot_asset_cfg.replace(
+                prim_path="/World/Robot"
+            )
+            self._robot = Articulation(robot_cfg_spawned)
 
-            self._sim = sim
+            # Initialize simulation
             self._sim.reset()
             self._robot.reset()
-            logger.info("IsaacLabEnv: G1 robot loaded and scene ready")
+
+            # Get actual DOF count from loaded robot
+            actual_dof = self._robot.data.joint_pos.shape[1]
+            if actual_dof != self._num_joints:
+                logger.warning(
+                    f"Config says {self._num_joints} joints but robot has "
+                    f"{actual_dof} — using actual count"
+                )
+                self._num_joints = actual_dof
+
+            logger.info(
+                f"IsaacLabEnv: {self._robot_type} loaded successfully "
+                f"({self._num_joints} DOF)"
+            )
 
         except Exception as e:
+            if self._simulation_app is not None:
+                self._simulation_app.close()
             raise RuntimeError(f"Failed to initialise Isaac Lab: {e}") from e
 
     def step(self, joint_targets: np.ndarray) -> None:
         import torch
+        targets = np.asarray(joint_targets, dtype=np.float32)
+        if len(targets) != self._num_joints:
+            targets = np.resize(targets, self._num_joints)
         targets_t = torch.tensor(
-            joint_targets, dtype=torch.float32, device="cuda:0"
+            targets, dtype=torch.float32, device="cuda:0"
         ).unsqueeze(0)
         self._robot.set_joint_position_target(targets_t)
         self._sim.step()
@@ -224,6 +268,8 @@ class IsaacLabEnv(SimEnv):
     def close(self) -> None:
         if self._sim is not None:
             self._sim.close()
+        if hasattr(self, '_simulation_app') and self._simulation_app is not None:
+            self._simulation_app.close()
         logger.info(f"IsaacLabEnv closed after {self._step_count} steps")
 
 
