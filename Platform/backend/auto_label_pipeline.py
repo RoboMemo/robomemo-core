@@ -139,6 +139,9 @@ class AutoLabelPipeline:
 
     def parse_json_response(self, text: str) -> Any:
         """Try to parse JSON from VLM response. Falls back to regex extraction."""
+        # Clean common VLM artifacts: markdown escapes like \_ → _
+        text = text.replace("\\_", "_").replace("\\*", "*")
+        
         # Try direct parse
         try:
             return json.loads(text)
