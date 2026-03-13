@@ -1,15 +1,18 @@
-import { useState, useEffect } from 'react';
-import { 
-  Plus, 
-  Search, 
-  MoreVertical, 
-  FolderOpen, 
-  Trash2, 
-  Edit, 
+import { useState, useEffect, useCallback, useRef } from 'react';
+import {
+  Plus,
+  Search,
+  MoreVertical,
+  FolderOpen,
+  Trash2,
+  Edit,
   Download,
   FileJson,
   Database,
-  Layers
+  Layers,
+  CloudDownload,
+  Heart,
+  Loader2
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -20,8 +23,19 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
+import { ScrollArea } from '@/components/ui/scroll-area';
 import { api } from '@/services/api';
 import type { Dataset } from '@/types';
+
+interface HFDataset {
+  id: string;
+  description?: string;
+  downloads?: number;
+  likes?: number;
+  tags?: string[];
+  lastModified?: string;
+  private?: boolean;
+}
 
 const formatLabels: Record<string, string> = {
   lerobot: 'LeRobot',
@@ -50,6 +64,57 @@ export default function DatasetManager() {
     format: 'lerobot',
     robotType: 'single_arm'
   });
+  const [isHubDialogOpen, setIsHubDialogOpen] = useState(false);
+  const [hubSearchQuery, setHubSearchQuery] = useState('');
+  const [hubResults, setHubResults] = useState<HFDataset[]>([]);
+  const [hubLoading, setHubLoading] = useState(false);
+  const [hubError, setHubError] = useState<string | null>(null);
+  const hubDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const popularChips = ['lerobot', 'aloha', 'pusht', 'robot manipulation'];
+
+  const searchHubDatasets = useCallback(async (query: string) => {
+    if (!query.trim()) {
+      setHubResults([]);
+      setHubLoading(false);
+      return;
+    }
+    setHubLoading(true);
+    setHubError(null);
+    try {
+      const res = await fetch(
+        `https://huggingface.co/api/datasets?search=${encodeURIComponent(query)}&limit=20&full=true`
+      );
+      if (!res.ok) throw new Error('Request failed');
+      const data: HFDataset[] = await res.json();
+      setHubResults(data);
+    } catch {
+      setHubError('Failed to search HuggingFace Hub. Check network.');
+      setHubResults([]);
+    } finally {
+      setHubLoading(false);
+    }
+  }, []);
+
+  const handleHubSearchChange = useCallback((value: string) => {
+    setHubSearchQuery(value);
+    if (hubDebounceRef.current) clearTimeout(hubDebounceRef.current);
+    hubDebounceRef.current = setTimeout(() => {
+      searchHubDatasets(value);
+    }, 500);
+  }, [searchHubDatasets]);
+
+  const handleImportFromHub = (hfDataset: HFDataset) => {
+    setIsHubDialogOpen(false);
+    const hasLerobot = hfDataset.tags?.includes('lerobot');
+    setNewDataset({
+      name: hfDataset.id,
+      description: hfDataset.description?.slice(0, 500) || '',
+      format: hasLerobot ? 'lerobot' : 'rlds',
+      robotType: 'single_arm'
+    });
+    setIsCreateDialogOpen(true);
+  };
 
   useEffect(() => {
     loadDatasets();
@@ -141,7 +206,12 @@ export default function DatasetManager() {
           <h2 className="text-2xl font-bold">Datasets</h2>
           <p className="text-muted-foreground">Manage your embodied intelligence datasets</p>
         </div>
-        <Dialog open={isCreateDialogOpen} onOpenChange={setIsCreateDialogOpen}>
+        <div className="flex gap-2">
+          <Button variant="outline" onClick={() => setIsHubDialogOpen(true)}>
+            <CloudDownload className="w-4 h-4 mr-2" />
+            Import from Hub
+          </Button>
+          <Dialog open={isCreateDialogOpen} onOpenChange={setIsCreateDialogOpen}>
           <DialogTrigger asChild>
             <Button>
               <Plus className="w-4 h-4 mr-2" />
@@ -221,7 +291,100 @@ export default function DatasetManager() {
             </div>
           </DialogContent>
         </Dialog>
+        </div>
       </div>
+
+      {/* Hub Import Dialog */}
+      <Dialog open={isHubDialogOpen} onOpenChange={(open) => {
+        setIsHubDialogOpen(open);
+        if (!open) {
+          setHubSearchQuery('');
+          setHubResults([]);
+          setHubError(null);
+        }
+      }}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Import Open Dataset from Hub</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 pt-2">
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+              <Input
+                placeholder="Search robot datasets (e.g. lerobot, aloha, pusht)..."
+                className="pl-10"
+                value={hubSearchQuery}
+                onChange={e => handleHubSearchChange(e.target.value)}
+              />
+            </div>
+            {!hubSearchQuery && (
+              <div className="flex gap-2 flex-wrap">
+                {popularChips.map(chip => (
+                  <Button
+                    key={chip}
+                    variant="outline"
+                    size="sm"
+                    onClick={() => handleHubSearchChange(chip)}
+                  >
+                    {chip}
+                  </Button>
+                ))}
+              </div>
+            )}
+            {hubLoading && (
+              <div className="flex items-center justify-center py-8">
+                <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
+              </div>
+            )}
+            {hubError && (
+              <p className="text-sm text-destructive text-center py-4">{hubError}</p>
+            )}
+            {!hubLoading && !hubError && hubResults.length > 0 && (
+              <ScrollArea className="h-[400px]">
+                <div className="space-y-3 pr-4">
+                  {hubResults.map(ds => (
+                    <Card key={ds.id} className="p-4">
+                      <div className="flex items-start justify-between gap-4">
+                        <div className="flex-1 min-w-0">
+                          <p className="font-bold text-sm truncate">{ds.id}</p>
+                          {ds.description && (
+                            <p className="text-xs text-muted-foreground mt-1 line-clamp-2">
+                              {ds.description.slice(0, 120)}
+                            </p>
+                          )}
+                          <div className="flex flex-wrap gap-1.5 mt-2">
+                            {ds.downloads != null && (
+                              <Badge variant="secondary" className="text-xs">
+                                <Download className="w-3 h-3 mr-1" />
+                                {ds.downloads.toLocaleString()}
+                              </Badge>
+                            )}
+                            {ds.likes != null && (
+                              <Badge variant="secondary" className="text-xs">
+                                <Heart className="w-3 h-3 mr-1" />
+                                {ds.likes.toLocaleString()}
+                              </Badge>
+                            )}
+                            {ds.tags?.slice(0, 3).map(tag => (
+                              <Badge key={tag} variant="outline" className="text-xs">{tag}</Badge>
+                            ))}
+                          </div>
+                        </div>
+                        <Button size="sm" onClick={() => handleImportFromHub(ds)}>
+                          Import
+                        </Button>
+                      </div>
+                    </Card>
+                  ))}
+                </div>
+              </ScrollArea>
+            )}
+            {!hubLoading && !hubError && hubSearchQuery && hubResults.length === 0 && (
+              <p className="text-sm text-muted-foreground text-center py-4">No datasets found.</p>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* Edit Dataset Dialog */}
       <Dialog open={isEditDialogOpen} onOpenChange={setIsEditDialogOpen}>
