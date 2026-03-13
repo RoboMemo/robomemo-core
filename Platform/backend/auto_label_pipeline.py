@@ -111,9 +111,12 @@ class AutoLabelPipeline:
 
     def call_vlm(self, prompt: str, images: List[str], temperature: float = 0.2) -> str:
         """Send prompt + images to Ollama and return the text response."""
+        msg: dict = {"role": "user", "content": prompt}
+        if images:
+            msg["images"] = images
         payload = {
             "model": self.model,
-            "messages": [{"role": "user", "content": prompt, "images": images}],
+            "messages": [msg],
             "stream": False,
             "options": {
                 "temperature": temperature,
@@ -183,25 +186,40 @@ class AutoLabelPipeline:
             for i, m in enumerate(frame_metas)
         )
 
-        prompt = f"""You are analyzing a robot manipulation video. The video has {video_info['total_frames']} total frames at {video_info['fps']} FPS, duration {video_info['duration']}s.
+        # Step 1a: describe each frame individually to avoid VLM hallucinating from examples
+        frame_descs = []
+        for idx, (fr, meta) in enumerate(zip(frames, frame_metas)):
+            desc_prompt = (
+                f"This is frame {idx+1} of {len(frames)} from a robot manipulation video "
+                f"(timestamp {meta['timestamp']:.1f}s). "
+                "In one sentence, describe ONLY what the robot arm and gripper are doing RIGHT NOW. "
+                "Be specific: mention arm position, gripper state (open/closing/closed), and any object contact. "
+                "Do NOT guess future actions."
+            )
+            desc = self.call_vlm(desc_prompt, [fr])
+            frame_descs.append(f"Frame {idx+1} ({meta['timestamp']:.1f}s): {desc.strip()}")
+            log(f"  [S1] frame {idx+1}: {desc.strip()[:80]}")
 
-I'm showing you {len(frames)} uniformly sampled frames. Frame timestamps: {ts_context}
+        combined_desc = "\n".join(frame_descs)
 
-Task: Segment this video into temporal phases. Each phase represents a distinct stage of the manipulation task (e.g., approaching the object, grasping, lifting, moving, placing, releasing).
+        # Step 1b: ask LLM to segment based on those descriptions (no images needed here)
+        prompt = f"""A robot manipulation video has {video_info['total_frames']} frames at {video_info['fps']} FPS ({video_info['duration']:.1f}s total).
 
-Return a JSON array of phases. Each phase object must have:
-- "phase_name": descriptive short name (snake_case, e.g., "approach_cup")
-- "start_frame_index": which of the shown frames (1-indexed) starts this phase
-- "end_frame_index": which of the shown frames (1-indexed) ends this phase
-- "description": one-sentence description of what happens
+Here are per-frame descriptions from {len(frames)} sampled frames:
+{combined_desc}
 
-Return ONLY valid JSON array, no other text. Example:
-[
-  {{"phase_name": "approach_cup", "start_frame_index": 1, "end_frame_index": 4, "description": "Robot arm moves toward the cup"}},
-  {{"phase_name": "grasp_cup", "start_frame_index": 5, "end_frame_index": 8, "description": "Gripper closes around the cup"}}
-]"""
+Based on THESE DESCRIPTIONS ONLY, segment the video into 2-5 distinct temporal phases.
+Each phase = a coherent stage of the manipulation (e.g. idle, reach, contact, grasp, lift, move, place, retract).
 
-        raw = self.call_vlm(prompt, frames)
+Return a JSON array. Each object must have:
+- "phase_name": short snake_case name derived from what you actually observed (NOT generic examples)
+- "start_frame_index": 1-indexed frame number where this phase starts
+- "end_frame_index": 1-indexed frame number where this phase ends
+- "description": one sentence describing the observed robot behavior
+
+Return ONLY the JSON array, no markdown, no explanation."""
+
+        raw = self.call_vlm(prompt, [])  # text-only segmentation based on descriptions
         phases_raw = self.parse_json_response(raw)
 
         if not phases_raw or not isinstance(phases_raw, list):
@@ -254,19 +272,23 @@ Return ONLY valid JSON array, no other text. Example:
                 phase["confidence"] = 0.0
                 continue
 
-            prompt = f"""You are analyzing a robot manipulation video phase called "{phase['phase_name']}".
-Description: {phase.get('description', 'N/A')}
-Time: {phase['start_time']}s to {phase['end_time']}s
+            prompt = f"""Look carefully at these {len(frames)} robot video frames (time: {phase['start_time']:.1f}s to {phase['end_time']:.1f}s).
 
-I'm showing you 4 representative frames from this phase.
+Identify EXACTLY what the robot is doing based ONLY on what you see in the images.
 
-Task: Identify the action primitive, target object, and gripper state.
+Action primitive vocabulary (pick exactly one):
+{vocab_str}
 
-Action primitive vocabulary: {vocab_str}
 Gripper states: open, closing, closed, opening
 
-Return ONLY a JSON object:
-{{"action_primitive": "approach", "target_object": "red_cup", "gripper_state": "open", "confidence": 0.85}}"""
+Answer these by looking at the images:
+1. What specific action primitive best describes what the robot arm is doing?
+2. What object is the robot interacting with (describe color/shape if unsure of name)?
+3. What is the gripper state right now?
+4. How confident are you (0.0-1.0)?
+
+Return ONLY a JSON object with keys: action_primitive, target_object, gripper_state, confidence
+No examples, no markdown, just the JSON."""
 
             raw = self.call_vlm(prompt, frames)
             result = self.parse_json_response(raw)
@@ -313,21 +335,19 @@ Return ONLY a JSON object:
                 }
                 continue
 
-            prompt = f"""You are analyzing the mechanics of a robot manipulation phase.
-Phase: {phase['phase_name']} ({phase['action_primitive']})
-Target object: {phase.get('target_object', 'unknown')}
+            prompt = f"""Look carefully at these {len(frames)} robot video frames.
 
-I'm showing you 4 frames from this phase.
+Describe the physical contact and forces you can observe in the images:
+- Is the robot touching any object? (contact_type: none / point / surface / edge / wrap)
+- How much force appears to be applied? (force_level: none / light / medium / strong)
+- Where exactly is contact occurring? (brief description of what you see)
+- What direction is the robot moving? (motion_direction: linear / rotational / complex)
 
-Task: Estimate the contact mechanics.
+Base your answer ONLY on what you can visually observe in these frames.
 
 Return ONLY a JSON object:
-{{
-  "contact_type": "none|point|surface|edge|wrap",
-  "force_level": "none|light|medium|strong",
-  "contact_points": "brief description of where contact occurs",
-  "motion_direction": "linear|rotational|complex"
-}}"""
+{{"contact_type": "...", "force_level": "...", "contact_points": "...", "motion_direction": "..."}}
+No markdown, no extra text."""
 
             raw = self.call_vlm(prompt, frames)
             result = self.parse_json_response(raw)
