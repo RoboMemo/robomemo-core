@@ -355,7 +355,13 @@ class SyntheticAMASS:
         )
 
     def _generate_walk(self, duration: float) -> tuple[np.ndarray, np.ndarray]:
-        """Walking motion: alternating leg swings + arm counter-swing."""
+        """Walking motion: alternating leg swings + arm counter-swing.
+
+        SMPL rotation axis convention with our bone offsets:
+        - Legs hang in -Z: pitch (forward/back) = rotation around X (index j*3+0)
+        - Arms extend in ±X: to hang down (-Z) = rotation around Y by ±π/2
+          Then pitch (arm swing forward/back) = additional Z rotation
+        """
         N = int(duration * self.fps)
         t = np.linspace(0, duration, N)
         poses = np.zeros((N, 72), dtype=np.float32)
@@ -367,40 +373,44 @@ class SyntheticAMASS:
         for i in range(N):
             phase = 2 * np.pi * walk_freq * t[i]
 
-            # Root translation (forward movement)
+            # Root translation (forward along Y)
             trans[i] = [0, stride_length * t[i] / duration * 2, 0.92]
 
-            # Slight root sway
-            poses[i, 0:3] = [0, 0, 0.03 * np.sin(phase)]  # pelvis rotation
+            # Slight pelvis rotation (yaw oscillation around Z)
+            poses[i, 0*3+2] = 0.03 * np.sin(phase)
 
-            # Leg swings (hip pitch)
-            hip_amplitude = 0.4
-            poses[i, 1*3+2] = hip_amplitude * np.sin(phase)      # L_Hip pitch (z-axis)
-            poses[i, 2*3+2] = -hip_amplitude * np.sin(phase)     # R_Hip pitch
+            # ── Legs: bones hang in -Z, pitch = rotation around X ──
+            hip_amp = 0.4
+            poses[i, 1*3+0] = hip_amp * np.sin(phase)       # L_Hip pitch
+            poses[i, 2*3+0] = -hip_amp * np.sin(phase)      # R_Hip pitch
 
-            # Knee bends
+            # Knee bends (only flex on swing phase)
             knee_amp = 0.5
-            l_knee_phase = max(0, np.sin(phase))
-            r_knee_phase = max(0, -np.sin(phase))
-            poses[i, 4*3+2] = -knee_amp * l_knee_phase   # L_Knee
-            poses[i, 5*3+2] = -knee_amp * r_knee_phase   # R_Knee
+            poses[i, 4*3+0] = -knee_amp * max(0, np.sin(phase))   # L_Knee
+            poses[i, 5*3+0] = -knee_amp * max(0, -np.sin(phase))  # R_Knee
 
-            # Ankle compensation
-            poses[i, 7*3+2] = 0.2 * np.sin(phase)   # L_Ankle
-            poses[i, 8*3+2] = -0.2 * np.sin(phase)  # R_Ankle
+            # Ankle dorsiflexion compensation
+            poses[i, 7*3+0] = 0.2 * np.sin(phase)    # L_Ankle
+            poses[i, 8*3+0] = -0.2 * np.sin(phase)   # R_Ankle
 
-            # Arm counter-swing (shoulder pitch)
+            # ── Arms: hang down via Y rotation, swing via X rotation ──
+            # L_Shoulder: Y=+π/2 brings arm from +X to -Z (hanging down)
+            poses[i, 16*3+1] = np.pi / 2
+            # R_Shoulder: Y=-π/2 brings arm from -X to -Z (hanging down)
+            poses[i, 17*3+1] = -np.pi / 2
+
+            # Arm forward/back swing: once hanging in -Z, pitch = X rotation
             arm_amp = 0.3
-            poses[i, 16*3+2] = -arm_amp * np.sin(phase)  # L_Shoulder pitch
-            poses[i, 17*3+2] = arm_amp * np.sin(phase)   # R_Shoulder pitch
+            poses[i, 16*3+0] = arm_amp * np.sin(phase)    # L arm counter-swing
+            poses[i, 17*3+0] = -arm_amp * np.sin(phase)   # R arm counter-swing
 
-            # Slight elbow bend
-            poses[i, 18*3+1] = -0.3   # L_Elbow slightly bent
-            poses[i, 19*3+1] = 0.3    # R_Elbow slightly bent
+            # Elbow slight bend (around Y in local frame after shoulder transform)
+            poses[i, 18*3+1] = 0.3    # L_Elbow
+            poses[i, 19*3+1] = -0.3   # R_Elbow
 
-            # Spine twist
-            poses[i, 3*3+2] = 0.05 * np.sin(phase)   # Spine1
-            poses[i, 9*3+2] = 0.03 * np.sin(phase)   # Spine3
+            # Spine twist (counter-rotation)
+            poses[i, 3*3+2] = 0.05 * np.sin(phase)    # Spine1 yaw
+            poses[i, 9*3+2] = 0.03 * np.sin(phase)    # Spine3 yaw
 
         return poses, trans
 
@@ -417,14 +427,17 @@ class SyntheticAMASS:
             phase = 2 * np.pi * wave_freq * t[i]
             trans[i] = [0, 0, 0.92]
 
-            # Right arm raised and waving
-            poses[i, 17*3+0] = -0.3   # R_Shoulder abduction
-            poses[i, 17*3+2] = -2.2   # R_Shoulder pitch (raised)
-            poses[i, 19*3+1] = 1.8 + 0.4 * np.sin(phase)  # R_Elbow bend + wave
-            poses[i, 21*3+2] = 0.3 * np.sin(phase * 2)    # R_Wrist
+            # Left arm: hanging down (Y rotation +π/2)
+            poses[i, 16*3+1] = np.pi / 2
+            poses[i, 18*3+1] = 0.3  # slight elbow bend
 
-            # Left arm relaxed at side
-            poses[i, 18*3+1] = -0.2   # L_Elbow slightly bent
+            # Right arm: raised and waving
+            # Start from hanging (Y=-π/2) and rotate to raised position
+            # Y=-π/4 → arm at ~45° between horizontal and down
+            poses[i, 17*3+1] = -np.pi / 4  # partially raised
+            poses[i, 17*3+0] = -0.5         # abducted slightly back
+            poses[i, 19*3+0] = 1.5 + 0.4 * np.sin(phase)  # elbow wave
+            poses[i, 21*3+2] = 0.3 * np.sin(phase * 2)    # wrist waggle
 
             # Slight body sway
             poses[i, 0*3+0] = 0.02 * np.sin(phase * 0.5)
@@ -443,28 +456,28 @@ class SyntheticAMASS:
 
         for i in range(N):
             phase = 2 * np.pi * squat_freq * t[i]
-            squat_depth = 0.5 * (1 - np.cos(phase)) * 0.5  # 0..0.5 range
+            squat_depth = 0.5 * (1 - np.cos(phase)) * 0.5  # 0..0.5
 
             # Root drops during squat
             trans[i] = [0, 0, 0.92 - squat_depth * 0.35]
 
-            # Hip flexion (both legs)
+            # Hip flexion — pitch = X rotation
             hip_angle = squat_depth * 1.5
-            poses[i, 1*3+2] = hip_angle    # L_Hip pitch
-            poses[i, 2*3+2] = hip_angle    # R_Hip pitch
+            poses[i, 1*3+0] = hip_angle    # L_Hip
+            poses[i, 2*3+0] = hip_angle    # R_Hip
 
             # Knee flexion
             knee_angle = squat_depth * 2.5
-            poses[i, 4*3+2] = -knee_angle  # L_Knee
-            poses[i, 5*3+2] = -knee_angle  # R_Knee
+            poses[i, 4*3+0] = -knee_angle  # L_Knee
+            poses[i, 5*3+0] = -knee_angle  # R_Knee
 
             # Ankle dorsiflexion
-            poses[i, 7*3+2] = squat_depth * 0.6
-            poses[i, 8*3+2] = squat_depth * 0.6
+            poses[i, 7*3+0] = squat_depth * 0.6
+            poses[i, 8*3+0] = squat_depth * 0.6
 
-            # Arms forward for balance
-            poses[i, 16*3+2] = -squat_depth * 1.0   # L_Shoulder
-            poses[i, 17*3+2] = -squat_depth * 1.0   # R_Shoulder
+            # Arms hang down + extend forward for balance
+            poses[i, 16*3+1] = np.pi / 2 - squat_depth * 1.0  # L arm: less down = forward
+            poses[i, 17*3+1] = -np.pi / 2 + squat_depth * 1.0  # R arm mirror
 
         return poses, trans
 
@@ -475,31 +488,32 @@ class SyntheticAMASS:
         poses = np.zeros((N, 72), dtype=np.float32)
         trans = np.zeros((N, 3), dtype=np.float32)
 
-        beat_freq = 1.5  # beats per second
+        beat_freq = 1.5
 
         for i in range(N):
             phase = 2 * np.pi * beat_freq * t[i]
             trans[i] = [0.1 * np.sin(phase * 0.5), 0, 0.92 + 0.03 * np.sin(phase * 2)]
 
             # Body groove
-            poses[i, 0*3+0] = 0.1 * np.sin(phase)       # pelvis yaw
-            poses[i, 0*3+2] = 0.05 * np.sin(phase * 2)  # pelvis roll
-            poses[i, 3*3+0] = 0.08 * np.sin(phase * 1.5)  # spine twist
-            poses[i, 9*3+0] = 0.06 * np.sin(phase * 1.5)  # upper spine
+            poses[i, 0*3+2] = 0.1 * np.sin(phase)       # pelvis yaw
+            poses[i, 0*3+0] = 0.05 * np.sin(phase * 2)  # pelvis pitch
+            poses[i, 3*3+2] = 0.08 * np.sin(phase * 1.5) # spine yaw
+            poses[i, 9*3+2] = 0.06 * np.sin(phase * 1.5) # upper spine yaw
 
             # Alternating arm raises
             l_phase = np.sin(phase)
             r_phase = np.sin(phase + np.pi * 0.5)
 
-            poses[i, 16*3+2] = -1.0 - 0.8 * max(0, l_phase)   # L_Shoulder up
-            poses[i, 18*3+1] = -0.5 - 0.8 * max(0, l_phase)   # L_Elbow
-            poses[i, 17*3+2] = -1.0 - 0.8 * max(0, r_phase)   # R_Shoulder up
-            poses[i, 19*3+1] = 0.5 + 0.8 * max(0, r_phase)    # R_Elbow
+            # Arms: Y rotation controls up/down. π/2=hanging, 0=horizontal, -π/4=raised
+            poses[i, 16*3+1] = np.pi / 2 - 1.2 * max(0, l_phase)  # L raise
+            poses[i, 17*3+1] = -np.pi / 2 + 1.2 * max(0, r_phase) # R raise
+            poses[i, 18*3+1] = 0.5 + 0.8 * max(0, l_phase)  # L_Elbow bend
+            poses[i, 19*3+1] = -0.5 - 0.8 * max(0, r_phase) # R_Elbow bend
 
-            # Slight leg movement
-            poses[i, 1*3+2] = 0.15 * np.sin(phase)     # L_Hip
-            poses[i, 2*3+2] = -0.15 * np.sin(phase)    # R_Hip
-            poses[i, 4*3+2] = -0.2 * max(0, np.sin(phase))   # L_Knee
-            poses[i, 5*3+2] = -0.2 * max(0, -np.sin(phase))  # R_Knee
+            # Slight leg movement — pitch around X
+            poses[i, 1*3+0] = 0.15 * np.sin(phase)
+            poses[i, 2*3+0] = -0.15 * np.sin(phase)
+            poses[i, 4*3+0] = -0.2 * max(0, np.sin(phase))
+            poses[i, 5*3+0] = -0.2 * max(0, -np.sin(phase))
 
         return poses, trans

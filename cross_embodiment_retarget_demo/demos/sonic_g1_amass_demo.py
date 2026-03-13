@@ -3,16 +3,22 @@ SONIC × G1 × AMASS Demo
 ========================
 End-to-end demo: AMASS motion capture → SONIC ONNX retarget → G1 joint targets → 3D visualization.
 
+Supports two data modes:
+  1. --retarget path/to/retargeted.npz  (unimotion/AMASS format: joint_pos(N,29) + body_pos_w(N,30,3))
+  2. --synthetic walk|wave|squat|dance  (generates SMPL-like motions for testing)
+
 Pipeline:
-  1. Load AMASS data (real .npz or synthetic)
-  2. Run SONIC encoder (smpl mode, 1762-dim → 64-dim tokens)
-  3. Run SONIC decoder (994-dim → 29-dim G1 joint targets)
-  4. Visualize side-by-side: SMPL input skeleton + G1 output skeleton
+  Left panel:  Ground-truth body positions (from mocap/retarget data or SMPL FK)
+  Right panel: G1 skeleton driven by SONIC ONNX decoder output
 
 Usage:
-    python -m cross_embodiment_retarget_demo.demos.sonic_g1_amass_demo --synthetic --duration 5
-    python -m cross_embodiment_retarget_demo.demos.sonic_g1_amass_demo --amass path/to/motion.npz
-    python -m cross_embodiment_retarget_demo.demos.sonic_g1_amass_demo --synthetic --motion dance --save-gif
+    # Real AMASS data (recommended)
+    python -m cross_embodiment_retarget_demo.demos.sonic_g1_amass_demo \
+        --retarget data/amass/CMU_07_01_walk.npz --save-gif
+
+    # Synthetic fallback
+    python -m cross_embodiment_retarget_demo.demos.sonic_g1_amass_demo \
+        --synthetic --motion walk --duration 5 --save-gif
 """
 
 from __future__ import annotations
@@ -22,50 +28,167 @@ import logging
 import sys
 import time
 from pathlib import Path
-from typing import Optional
 
 import numpy as np
 
 logger = logging.getLogger(__name__)
 
 
-# ── G1 Skeleton Definition ────────────────────────────────────
+# ── G1 Body Names (30 bodies from IsaacLab) ──────────────────
 
-# G1 joint names (29 DOF)
+G1_BODY_NAMES = [
+    "pelvis",           # 0
+    "left_hip_pitch",   # 1
+    "right_hip_pitch",  # 2
+    "waist_yaw",        # 3 (=pelvis, same position)
+    "left_hip_roll",    # 4
+    "right_hip_roll",   # 5
+    "waist_roll",       # 6
+    "left_hip_yaw",     # 7
+    "right_hip_yaw",    # 8
+    "waist_pitch",      # 9 (=torso_link)
+    "left_knee",        # 10
+    "right_knee",       # 11
+    "left_shoulder_pitch", # 12
+    "right_shoulder_pitch", # 13
+    "left_ankle_pitch", # 14
+    "right_ankle_pitch", # 15
+    "left_shoulder_roll", # 16
+    "right_shoulder_roll", # 17
+    "left_ankle_roll",  # 18
+    "right_ankle_roll",  # 19
+    "left_shoulder_yaw", # 20
+    "right_shoulder_yaw", # 21
+    "left_elbow",       # 22
+    "right_elbow",      # 23
+    "left_wrist_roll",  # 24
+    "right_wrist_roll",  # 25
+    "left_wrist_pitch",  # 26
+    "right_wrist_pitch", # 27
+    "left_wrist_yaw",   # 28
+    "right_wrist_yaw",  # 29
+]
+
+# Bones connecting G1 body nodes for skeleton visualization
+G1_BODY_BONES = [
+    # Spine
+    (0, 3), (3, 6), (6, 9),
+    # Left leg
+    (0, 1), (1, 4), (4, 7), (7, 10), (10, 14), (14, 18),
+    # Right leg
+    (0, 2), (2, 5), (5, 8), (8, 11), (11, 15), (15, 19),
+    # Left arm
+    (9, 12), (12, 16), (16, 20), (20, 22), (22, 24), (24, 26), (26, 28),
+    # Right arm
+    (9, 13), (13, 17), (17, 21), (21, 23), (23, 25), (25, 27), (27, 29),
+]
+
+
+# ── G1 Joint Names (29 DOF) ──────────────────────────────────
+
 G1_JOINT_NAMES = [
-    "torso_yaw", "torso_pitch", "torso_roll",                    # 0-2
-    "l_shoulder_pitch", "l_shoulder_roll", "l_shoulder_yaw",     # 3-5
-    "l_elbow", "l_wrist",                                        # 6-7
-    "r_shoulder_pitch", "r_shoulder_roll", "r_shoulder_yaw",     # 8-10
-    "r_elbow", "r_wrist",                                        # 11-12
-    "l_hip_yaw", "l_hip_roll", "l_hip_pitch",                   # 13-15
-    "l_knee", "l_ankle_pitch", "l_ankle_roll",                   # 16-18
-    "r_hip_yaw", "r_hip_roll", "r_hip_pitch",                   # 19-21
-    "r_knee", "r_ankle_pitch", "r_ankle_roll",                   # 22-24
-    "l_hand_grip", "l_hand_wrist", "r_hand_grip", "r_hand_wrist",  # 25-28
+    "l_hip_yaw", "l_hip_roll", "l_hip_pitch",               # 0-2
+    "l_knee", "l_ankle_pitch", "l_ankle_roll",               # 3-5
+    "r_hip_yaw", "r_hip_roll", "r_hip_pitch",               # 6-8
+    "r_knee", "r_ankle_pitch", "r_ankle_roll",               # 9-11
+    "waist_yaw", "waist_roll", "waist_pitch",                # 12-14
+    "l_shoulder_pitch", "l_shoulder_roll", "l_shoulder_yaw", # 15-17
+    "l_elbow", "l_wrist_roll", "l_wrist_pitch", "l_wrist_yaw", # 18-21
+    "r_shoulder_pitch", "r_shoulder_roll", "r_shoulder_yaw", # 22-24
+    "r_elbow", "r_wrist_roll", "r_wrist_pitch", "r_wrist_yaw", # 25-28
 ]
 
-# G1 simplified skeleton for visualization
-# Each entry: (parent_keypoint_name, child_keypoint_name)
-# We map 29 joint angles to approximate 3D keypoints
-G1_KEYPOINTS = [
-    "pelvis",
-    "torso",
-    "chest",
-    "neck",
-    "l_shoulder", "l_elbow", "l_wrist", "l_hand",
-    "r_shoulder", "r_elbow", "r_wrist", "r_hand",
-    "l_hip", "l_knee", "l_ankle", "l_foot",
-    "r_hip", "r_knee", "r_ankle", "r_foot",
-]
 
-G1_BONES = [
-    ("pelvis", "torso"),
-    ("torso", "chest"),
-    ("chest", "neck"),
-    ("chest", "l_shoulder"), ("l_shoulder", "l_elbow"),
+# ── Simplified FK for joint-angle visualization ───────────────
+
+def joint_angles_to_keypoints(joint_angles: np.ndarray) -> dict[str, np.ndarray]:
+    """Convert 29 G1 joint angles to approximate 3D keypoints via trig FK.
+
+    Uses 2-link planar FK in the sagittal (YZ) plane.
+
+    The joint ordering here follows the unimotion/AMASS retarget format:
+      0-5:   left leg  (hip_yaw, hip_roll, hip_pitch, knee, ankle_pitch, ankle_roll)
+      6-11:  right leg
+      12-14: waist (yaw, roll, pitch)
+      15-21: left arm  (shoulder_pitch/roll/yaw, elbow, wrist_roll/pitch/yaw)
+      22-28: right arm
+    """
+    q = joint_angles
+    kp = {}
+
+    # Pelvis
+    pelvis = np.array([0.0, 0.0, 0.75])
+    kp["pelvis"] = pelvis
+
+    # Torso chain (waist: q12=yaw, q13=roll, q14=pitch)
+    torso = pelvis + np.array([
+        np.sin(q[12]) * 0.04,
+        np.sin(q[14]) * 0.04,
+        0.30,
+    ])
+    kp["torso"] = torso
+
+    # Helper: 2-link FK in YZ plane. angle=0 → pointing down (-Z)
+    def fk_yz(origin, a1, L1, a2, L2):
+        j1 = origin + np.array([0, L1 * np.sin(a1), -L1 * np.cos(a1)])
+        a_tot = a1 + a2
+        j2 = j1 + np.array([0, L2 * np.sin(a_tot), -L2 * np.cos(a_tot)])
+        return j1, j2
+
+    # ── Left Leg (q0-q5) ──
+    l_hip = pelvis + np.array([0.09, 0, 0])
+    kp["l_hip"] = l_hip
+    thigh, shin = 0.35, 0.37
+    l_knee, l_ankle = fk_yz(l_hip, q[2], thigh, q[3], shin)
+    l_knee[0] += np.sin(q[0]) * 0.05  # hip yaw
+    l_ankle[0] += np.sin(q[0]) * 0.08
+    kp["l_knee"] = l_knee
+    kp["l_ankle"] = l_ankle
+    kp["l_foot"] = np.array([l_ankle[0], l_ankle[1] + 0.08, max(0.0, l_ankle[2] - 0.05)])
+
+    # ── Right Leg (q6-q11) ──
+    r_hip = pelvis + np.array([-0.09, 0, 0])
+    kp["r_hip"] = r_hip
+    r_knee, r_ankle = fk_yz(r_hip, q[8], thigh, q[9], shin)
+    r_knee[0] -= np.sin(q[6]) * 0.05
+    r_ankle[0] -= np.sin(q[6]) * 0.08
+    kp["r_knee"] = r_knee
+    kp["r_ankle"] = r_ankle
+    kp["r_foot"] = np.array([r_ankle[0], r_ankle[1] + 0.08, max(0.0, r_ankle[2] - 0.05)])
+
+    # ── Left Arm (q15-q21) ──
+    l_sh = torso + np.array([0.18, 0, 0.05])
+    kp["l_shoulder"] = l_sh
+    upper_arm, forearm = 0.26, 0.24
+    l_elbow, l_wrist = fk_yz(l_sh, q[15], upper_arm, q[18], forearm)
+    l_elbow[0] += np.sin(q[17]) * 0.05
+    l_wrist[0] += np.sin(q[17]) * 0.08
+    kp["l_elbow"] = l_elbow
+    kp["l_wrist"] = l_wrist
+    kp["l_hand"] = l_wrist + np.array([0, 0, -0.05])
+
+    # ── Right Arm (q22-q28) ──
+    r_sh = torso + np.array([-0.18, 0, 0.05])
+    kp["r_shoulder"] = r_sh
+    r_elbow, r_wrist = fk_yz(r_sh, q[22], upper_arm, q[25], forearm)
+    r_elbow[0] -= np.sin(q[24]) * 0.05
+    r_wrist[0] -= np.sin(q[24]) * 0.08
+    kp["r_elbow"] = r_elbow
+    kp["r_wrist"] = r_wrist
+    kp["r_hand"] = r_wrist + np.array([0, 0, -0.05])
+
+    # Neck / Head
+    kp["neck"] = torso + np.array([0, 0, 0.10])
+
+    return kp
+
+
+# Simplified skeleton bones for the joint-angle visualization
+G1_SIMPLE_BONES = [
+    ("pelvis", "torso"), ("torso", "neck"),
+    ("torso", "l_shoulder"), ("l_shoulder", "l_elbow"),
     ("l_elbow", "l_wrist"), ("l_wrist", "l_hand"),
-    ("chest", "r_shoulder"), ("r_shoulder", "r_elbow"),
+    ("torso", "r_shoulder"), ("r_shoulder", "r_elbow"),
     ("r_elbow", "r_wrist"), ("r_wrist", "r_hand"),
     ("pelvis", "l_hip"), ("l_hip", "l_knee"),
     ("l_knee", "l_ankle"), ("l_ankle", "l_foot"),
@@ -73,151 +196,20 @@ G1_BONES = [
     ("r_knee", "r_ankle"), ("r_ankle", "r_foot"),
 ]
 
-# Default G1 keypoint positions (standing pose, Z-up, meters)
-G1_DEFAULT_KEYPOINTS = {
-    "pelvis":     np.array([0.0, 0.0, 0.80]),
-    "torso":      np.array([0.0, 0.0, 0.92]),
-    "chest":      np.array([0.0, 0.0, 1.05]),
-    "neck":       np.array([0.0, 0.0, 1.15]),
-    "l_shoulder": np.array([0.18, 0.0, 1.10]),
-    "l_elbow":    np.array([0.18, 0.0, 0.84]),
-    "l_wrist":    np.array([0.18, 0.0, 0.60]),
-    "l_hand":     np.array([0.18, 0.0, 0.55]),
-    "r_shoulder": np.array([-0.18, 0.0, 1.10]),
-    "r_elbow":    np.array([-0.18, 0.0, 0.84]),
-    "r_wrist":    np.array([-0.18, 0.0, 0.60]),
-    "r_hand":     np.array([-0.18, 0.0, 0.55]),
-    "l_hip":      np.array([0.09, 0.0, 0.80]),
-    "l_knee":     np.array([0.09, 0.0, 0.45]),
-    "l_ankle":    np.array([0.09, 0.0, 0.08]),
-    "l_foot":     np.array([0.09, 0.08, 0.0]),
-    "r_hip":      np.array([-0.09, 0.0, 0.80]),
-    "r_knee":     np.array([-0.09, 0.0, 0.45]),
-    "r_ankle":    np.array([-0.09, 0.0, 0.08]),
-    "r_foot":     np.array([-0.09, 0.08, 0.0]),
-}
 
-
-def joint_angles_to_keypoints(
-    joint_angles: np.ndarray,
-    scale: float = 0.15,
-) -> dict[str, np.ndarray]:
-    """Convert 29 G1 joint angles to approximate 3D keypoint positions.
-
-    This is a simplified kinematic mapping for visualization — not exact FK.
-    Joint angles are mapped to displacements from the default standing pose.
-
-    Args:
-        joint_angles: (29,) joint targets in radians.
-        scale: Sensitivity of angle → displacement mapping.
-
-    Returns:
-        Dict of keypoint_name → (3,) position.
-    """
-    q = joint_angles
-    kp = {k: v.copy().astype(np.float64) for k, v in G1_DEFAULT_KEYPOINTS.items()}
-
-    # Torso rotation
-    torso_yaw, torso_pitch, torso_roll = q[0], q[1], q[2]
-    kp["torso"][0] += torso_yaw * scale * 0.5
-    kp["torso"][1] += torso_pitch * scale * 0.5
-    kp["chest"][0] += torso_yaw * scale
-    kp["chest"][1] += torso_pitch * scale
-    kp["neck"][0] += torso_yaw * scale * 1.2
-    kp["neck"][1] += torso_pitch * scale * 1.2
-
-    # Left arm
-    l_sp, l_sr, l_sy = q[3], q[4], q[5]
-    l_elbow_angle, l_wrist_angle = q[6], q[7]
-
-    kp["l_shoulder"][2] += -l_sp * scale * 0.3
-    kp["l_shoulder"][0] += l_sr * scale * 0.3
-
-    kp["l_elbow"][2] = kp["l_shoulder"][2] + (-0.26 + l_sp * scale * 0.5)
-    kp["l_elbow"][0] = kp["l_shoulder"][0] + l_sr * scale * 0.5
-    kp["l_elbow"][1] = kp["l_shoulder"][1] + l_sy * scale * 0.3
-
-    elbow_bend = l_elbow_angle * scale
-    kp["l_wrist"][2] = kp["l_elbow"][2] + (-0.24 + elbow_bend * 0.5)
-    kp["l_wrist"][0] = kp["l_elbow"][0]
-    kp["l_wrist"][1] = kp["l_elbow"][1] + elbow_bend * 0.3
-
-    kp["l_hand"][2] = kp["l_wrist"][2] - 0.05
-    kp["l_hand"][0] = kp["l_wrist"][0]
-    kp["l_hand"][1] = kp["l_wrist"][1]
-
-    # Right arm
-    r_sp, r_sr, r_sy = q[8], q[9], q[10]
-    r_elbow_angle, r_wrist_angle = q[11], q[12]
-
-    kp["r_shoulder"][2] += -r_sp * scale * 0.3
-    kp["r_shoulder"][0] += r_sr * scale * 0.3
-
-    kp["r_elbow"][2] = kp["r_shoulder"][2] + (-0.26 + r_sp * scale * 0.5)
-    kp["r_elbow"][0] = kp["r_shoulder"][0] + r_sr * scale * 0.5
-    kp["r_elbow"][1] = kp["r_shoulder"][1] + r_sy * scale * 0.3
-
-    elbow_bend_r = r_elbow_angle * scale
-    kp["r_wrist"][2] = kp["r_elbow"][2] + (-0.24 + elbow_bend_r * 0.5)
-    kp["r_wrist"][0] = kp["r_elbow"][0]
-    kp["r_wrist"][1] = kp["r_elbow"][1] + elbow_bend_r * 0.3
-
-    kp["r_hand"][2] = kp["r_wrist"][2] - 0.05
-    kp["r_hand"][0] = kp["r_wrist"][0]
-    kp["r_hand"][1] = kp["r_wrist"][1]
-
-    # Left leg
-    l_hy, l_hr, l_hp = q[13], q[14], q[15]
-    l_knee_angle = q[16]
-    l_ap, l_ar = q[17], q[18]
-
-    kp["l_hip"][0] += l_hy * scale * 0.3
-    kp["l_knee"][2] = kp["l_hip"][2] + (-0.35 + l_hp * scale * 0.2)
-    kp["l_knee"][1] = kp["l_hip"][1] + l_hp * scale * 0.3
-    kp["l_knee"][0] = kp["l_hip"][0] + l_hr * scale * 0.2
-
-    kp["l_ankle"][2] = kp["l_knee"][2] + (-0.37 - l_knee_angle * scale * 0.3)
-    kp["l_ankle"][1] = kp["l_knee"][1] + l_knee_angle * scale * 0.2
-    kp["l_ankle"][0] = kp["l_knee"][0]
-
-    kp["l_foot"][2] = max(0, kp["l_ankle"][2] - 0.08)
-    kp["l_foot"][1] = kp["l_ankle"][1] + 0.08
-    kp["l_foot"][0] = kp["l_ankle"][0]
-
-    # Right leg
-    r_hy, r_hr, r_hp = q[19], q[20], q[21]
-    r_knee_angle = q[22]
-    r_ap, r_ar = q[23], q[24]
-
-    kp["r_hip"][0] += r_hy * scale * 0.3
-    kp["r_knee"][2] = kp["r_hip"][2] + (-0.35 + r_hp * scale * 0.2)
-    kp["r_knee"][1] = kp["r_hip"][1] + r_hp * scale * 0.3
-    kp["r_knee"][0] = kp["r_hip"][0] + r_hr * scale * 0.2
-
-    kp["r_ankle"][2] = kp["r_knee"][2] + (-0.37 - r_knee_angle * scale * 0.3)
-    kp["r_ankle"][1] = kp["r_knee"][1] + r_knee_angle * scale * 0.2
-    kp["r_ankle"][0] = kp["r_knee"][0]
-
-    kp["r_foot"][2] = max(0, kp["r_ankle"][2] - 0.08)
-    kp["r_foot"][1] = kp["r_ankle"][1] + 0.08
-    kp["r_foot"][0] = kp["r_ankle"][0]
-
-    return kp
-
-
-# ── SMPL Skeleton Visualizer ──────────────────────────────────
+# ── SMPL Bones (for synthetic mode) ──────────────────────────
 
 SMPL_BONES = [
-    (0, 1), (0, 2), (0, 3),     # pelvis → hips, spine
-    (1, 4), (2, 5), (3, 6),     # hips → knees, spine → spine2
-    (4, 7), (5, 8), (6, 9),     # knees → ankles, spine2 → spine3
-    (7, 10), (8, 11),           # ankles → feet
-    (9, 12), (9, 13), (9, 14),  # spine3 → neck, collars
-    (12, 15),                    # neck → head
-    (13, 16), (14, 17),          # collars → shoulders
-    (16, 18), (17, 19),          # shoulders → elbows
-    (18, 20), (19, 21),          # elbows → wrists
-    (20, 22), (21, 23),          # wrists → hands
+    (0, 1), (0, 2), (0, 3),
+    (1, 4), (2, 5), (3, 6),
+    (4, 7), (5, 8), (6, 9),
+    (7, 10), (8, 11),
+    (9, 12), (9, 13), (9, 14),
+    (12, 15),
+    (13, 16), (14, 17),
+    (16, 18), (17, 19),
+    (18, 20), (19, 21),
+    (20, 22), (21, 23),
 ]
 
 
@@ -226,35 +218,53 @@ SMPL_BONES = [
 def run_demo(args: argparse.Namespace):
     """Run the SONIC × G1 × AMASS end-to-end demo."""
     import matplotlib
-    matplotlib.use("Agg")  # Non-interactive backend for GIF/video saving
+    matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     from matplotlib.animation import FuncAnimation, PillowWriter
 
     try:
         import onnxruntime as ort
     except ImportError:
-        print("ERROR: onnxruntime is required. Install: pip install onnxruntime-gpu")
+        print("ERROR: onnxruntime required. Install: pip install onnxruntime-gpu")
         sys.exit(1)
 
-    # Lazy imports to keep startup fast
-    from ..src.amass_loader import SyntheticAMASS, load_amass
-    from ..src.sonic_amass_bridge import SonicAMASSBridge
-
-    # ── Load AMASS data ───────────────────────────────────────
     print("=" * 60)
     print("  SONIC × G1 × AMASS  End-to-End Demo")
     print("=" * 60)
 
-    if args.amass:
-        print(f"\n📂 Loading AMASS data: {args.amass}")
-        motion = load_amass(args.amass, target_fps=args.fps)
+    # ── Load data ─────────────────────────────────────────────
+    use_retarget = args.retarget is not None
+    motion = None
+    retarget_data = None
+
+    if use_retarget:
+        # Load retargeted AMASS data (unimotion format)
+        retarget_path = Path(args.retarget)
+        if not retarget_path.exists():
+            print(f"❌ File not found: {retarget_path}")
+            sys.exit(1)
+
+        print(f"\n📂 Loading retargeted AMASS: {retarget_path}")
+        retarget_data = np.load(str(retarget_path), allow_pickle=True)
+
+        fps = int(retarget_data["fps"][0])
+        gt_joint_pos = retarget_data["joint_pos"]     # (N, 29) G1 joint angles
+        gt_body_pos = retarget_data["body_pos_w"]      # (N, 30, 3) body world positions
+        gt_joint_vel = retarget_data["joint_vel"]       # (N, 29)
+
+        n_total = gt_joint_pos.shape[0]
+        print(f"   Frames: {n_total}, FPS: {fps}, Duration: {n_total/fps:.1f}s")
+        print(f"   Joint range: [{gt_joint_pos.min():.3f}, {gt_joint_pos.max():.3f}]")
+
     else:
+        # Synthetic mode
+        from ..src.amass_loader import SyntheticAMASS
         print(f"\n🎭 Generating synthetic motion: {args.motion}, {args.duration}s")
         synth = SyntheticAMASS(fps=args.fps)
         motion = synth.generate(motion_type=args.motion, duration=args.duration)
-
-    print(f"   Frames: {motion.n_frames}, FPS: {motion.fps}, "
-          f"Duration: {motion.duration:.1f}s")
+        fps = int(motion.fps)
+        n_total = motion.n_frames
+        print(f"   Frames: {n_total}, FPS: {fps}, Duration: {motion.duration:.1f}s")
 
     # ── Load SONIC ONNX models ────────────────────────────────
     model_dir = Path(args.model_dir).expanduser()
@@ -263,373 +273,355 @@ def run_demo(args: argparse.Namespace):
 
     if not encoder_path.exists() or not decoder_path.exists():
         print(f"\n❌ SONIC models not found in {model_dir}")
-        print("   Expected: model_encoder.onnx, model_decoder.onnx")
         sys.exit(1)
 
     device = args.device
-    if device == "cuda":
-        providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
-    else:
-        providers = ["CPUExecutionProvider"]
+    providers = (["CUDAExecutionProvider", "CPUExecutionProvider"]
+                 if device == "cuda" else ["CPUExecutionProvider"])
 
     print(f"\n🧠 Loading SONIC ONNX models ({device})...")
     sess_opts = ort.SessionOptions()
     sess_opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
 
-    encoder = ort.InferenceSession(
-        str(encoder_path), sess_options=sess_opts, providers=providers,
+    encoder = ort.InferenceSession(str(encoder_path), sess_options=sess_opts, providers=providers)
+    decoder = ort.InferenceSession(str(decoder_path), sess_options=sess_opts, providers=providers)
+
+    enc_prov = encoder.get_providers()[0]
+    dec_prov = decoder.get_providers()[0]
+    print(f"   Encoder: {enc_prov}, Decoder: {dec_prov}")
+
+    # ── Import bridge ─────────────────────────────────────────
+    from ..src.sonic_amass_bridge import (
+        SonicAMASSBridge, G1_DEFAULT_DOF_POS, G1_ACTION_SCALE,
+        ENCODER_DIM, DECODER_DIM, NUM_G1_JOINTS,
     )
-    decoder = ort.InferenceSession(
-        str(decoder_path), sess_options=sess_opts, providers=providers,
-    )
 
-    # Verify providers
-    enc_provider = encoder.get_providers()[0]
-    dec_provider = decoder.get_providers()[0]
-    print(f"   Encoder provider: {enc_provider}")
-    print(f"   Decoder provider: {dec_provider}")
+    bridge = SonicAMASSBridge(dt=1.0 / fps)
 
-    # Verify shapes
-    enc_input = encoder.get_inputs()[0]
-    dec_input = decoder.get_inputs()[0]
-    enc_output = encoder.get_outputs()[0]
-    dec_output = decoder.get_outputs()[0]
-    print(f"   Encoder: {enc_input.name} {enc_input.shape} → "
-          f"{enc_output.name} {enc_output.shape}")
-    print(f"   Decoder: {dec_input.name} {dec_input.shape} → "
-          f"{dec_output.name} {dec_output.shape}")
-
-    # ── Run inference loop ────────────────────────────────────
-    bridge = SonicAMASSBridge(dt=1.0 / args.fps)
-
-    n_frames = motion.n_frames
+    n_frames = n_total
     if args.max_frames and args.max_frames < n_frames:
         n_frames = args.max_frames
 
     print(f"\n🚀 Running SONIC inference on {n_frames} frames...")
 
-    # Storage for results
-    smpl_positions_all = []     # (N, 24, 3)
-    g1_joint_targets_all = []   # (N, 29)
-    g1_keypoints_all = []       # (N, dict)
-    encoder_tokens_all = []     # (N, 64)
+    # Storage
+    gt_bodies_all = []        # left panel: ground truth body positions
+    g1_joint_targets_all = [] # right panel: SONIC output joint angles
+    encoder_tokens_all = []
     timing_stats = []
 
     for frame_idx in range(n_frames):
         t0 = time.perf_counter()
 
-        # Pack encoder input
-        enc_obs = bridge.pack_encoder_input(motion, frame_idx)
+        if use_retarget:
+            # ── Pack encoder from retargeted G1 joint data ──
+            # In G1 mode, encoder needs reference G1 joint positions/velocities
+            ref_joints = gt_joint_pos[frame_idx]  # (29,)
+            ref_vel = gt_joint_vel[frame_idx]      # (29,)
+            ref_body = gt_body_pos[frame_idx]      # (30, 3)
+
+            # Root Z from pelvis body position
+            root_z = float(ref_body[0, 2])
+
+            # Root orientation as 6D (take from body quaternion)
+            root_quat = retarget_data["body_quat_w"][frame_idx, 0]  # (4,)
+            # Convert quaternion (w,x,y,z) to rotation matrix
+            w, x, y, z = root_quat
+            R = np.array([
+                [1 - 2*(y*y + z*z), 2*(x*y - w*z), 2*(x*z + w*y)],
+                [2*(x*y + w*z), 1 - 2*(x*x + z*z), 2*(y*z - w*x)],
+                [2*(x*z - w*y), 2*(y*z + w*x), 1 - 2*(x*x + y*y)],
+            ], dtype=np.float32)
+            anchor_6d = R[:, :2].T.flatten()  # (6,)
+
+            # Pack encoder observation (G1 mode)
+            bridge._motion_joint_pos_buf.push(ref_joints)
+            bridge._motion_joint_vel_buf.push(np.clip(ref_vel, -10, 10))
+            bridge._motion_root_z_buf.push(np.array([root_z], dtype=np.float32))
+            bridge._motion_anchor_orient_buf.push(anchor_6d)
+
+            # Lower body (indices 0-11 in this joint ordering = legs)
+            lower_pos = ref_joints[:12]
+            lower_vel = np.clip(ref_vel[:12], -10, 10)
+            bridge._motion_lower_pos_buf.push(lower_pos)
+            bridge._motion_lower_vel_buf.push(lower_vel)
+
+            # Build encoder vector
+            obs = np.zeros(ENCODER_DIM, dtype=np.float32)
+            offset = 0
+
+            # [0:4] mode = G1
+            obs[0] = 1.0
+            offset = 4
+
+            # [4:294] joint_pos 10f step5
+            obs[offset:offset+290] = bridge._motion_joint_pos_buf.get_contiguous(10, step=5)
+            offset += 290
+
+            # [294:584] joint_vel 10f step5
+            obs[offset:offset+290] = bridge._motion_joint_vel_buf.get_contiguous(10, step=5)
+            offset += 290
+
+            # [584:594] root_z 10f step5
+            obs[offset:offset+10] = bridge._motion_root_z_buf.get_contiguous(10, step=5)
+            offset += 10
+
+            # [594:595] root_z current
+            obs[offset] = root_z
+            offset += 1
+
+            # [595:601] anchor orient current
+            obs[offset:offset+6] = anchor_6d
+            offset += 6
+
+            # [601:661] anchor orient 10f step5
+            obs[offset:offset+60] = bridge._motion_anchor_orient_buf.get_contiguous(10, step=5)
+            offset += 60
+
+            # [661:781] lower body pos 10f step5
+            obs[offset:offset+120] = bridge._motion_lower_pos_buf.get_contiguous(10, step=5)
+            offset += 120
+
+            # [781:901] lower body vel 10f step5
+            obs[offset:offset+120] = bridge._motion_lower_vel_buf.get_contiguous(10, step=5)
+            offset += 120
+
+            # [901:1762] — VR/SMPL/wrist targets = zeros for G1 mode
+            enc_obs = obs.reshape(1, ENCODER_DIM)
+
+            # Store ground truth body for left panel
+            gt_bodies_all.append(ref_body.copy())
+        else:
+            # Synthetic mode: use SMPL bridge
+            enc_obs = bridge.pack_encoder_input(motion, frame_idx)
+            gt_bodies_all.append(motion.joint_positions[frame_idx].copy())
+
         t1 = time.perf_counter()
 
         # Run encoder
-        enc_result = encoder.run(None, {enc_input.name: enc_obs})
-        tokens = enc_result[0]  # (1, 64)
+        tokens = encoder.run(None, {"obs_dict": enc_obs})[0]
         t2 = time.perf_counter()
 
-        # Pack decoder input
+        # Pack decoder
         dec_obs = bridge.pack_decoder_input(tokens)
         t3 = time.perf_counter()
 
         # Run decoder
-        dec_result = decoder.run(None, {dec_input.name: dec_obs})
-        action = dec_result[0].flatten()  # (29,)
+        action = decoder.run(None, {"obs_dict": dec_obs})[0].flatten()
         t4 = time.perf_counter()
 
-        # Apply velocity limiting + joint clamping
-        action = np.clip(action, -3.14, 3.14)
-
-        # Step mock physics
+        # Apply action → joint targets
+        action = np.clip(action, -5.0, 5.0)
         bridge.step_mock_physics(action, velocity_limit=args.vel_limit)
         t5 = time.perf_counter()
 
-        # Store results
-        smpl_positions_all.append(motion.joint_positions[frame_idx].copy())
         g1_joint_targets_all.append(bridge.joint_positions.copy())
-        g1_keypoints_all.append(joint_angles_to_keypoints(bridge.joint_positions))
         encoder_tokens_all.append(tokens.flatten().copy())
 
         timing_stats.append({
-            "pack_enc": (t1 - t0) * 1000,
-            "run_enc": (t2 - t1) * 1000,
-            "pack_dec": (t3 - t2) * 1000,
-            "run_dec": (t4 - t3) * 1000,
-            "physics": (t5 - t4) * 1000,
+            "pack": (t1 - t0) * 1000,
+            "enc": (t2 - t1) * 1000,
+            "dec": (t4 - t3) * 1000,
             "total": (t5 - t0) * 1000,
         })
 
         if frame_idx % 50 == 0 or frame_idx == n_frames - 1:
-            stats = timing_stats[-1]
+            s = timing_stats[-1]
             print(f"   Frame {frame_idx:4d}/{n_frames}: "
-                  f"enc={stats['run_enc']:.2f}ms  dec={stats['run_dec']:.2f}ms  "
-                  f"total={stats['total']:.2f}ms  "
-                  f"action_range=[{action.min():.3f}, {action.max():.3f}]")
+                  f"enc={s['enc']:.2f}ms  dec={s['dec']:.2f}ms  "
+                  f"total={s['total']:.2f}ms  "
+                  f"action=[{action.min():.2f}, {action.max():.2f}]")
 
-    # ── Print summary statistics ──────────────────────────────
+    # ── Statistics ────────────────────────────────────────────
     print("\n" + "=" * 60)
-    print("  Inference Statistics")
-    print("=" * 60)
-
-    # Skip first few frames (warmup)
     warmup = min(10, len(timing_stats) // 2)
-    stats_arr = {
-        k: np.array([s[k] for s in timing_stats[warmup:]])
-        for k in timing_stats[0].keys()
-    }
+    stats = {k: np.array([s[k] for s in timing_stats[warmup:]]) for k in timing_stats[0]}
+    for key, vals in stats.items():
+        print(f"   {key:8s}: mean={vals.mean():.3f}ms  p99={np.percentile(vals, 99):.3f}ms")
+    print(f"   FPS: {1000.0 / stats['total'].mean():.1f} (target: {fps})")
 
-    for key, vals in stats_arr.items():
-        print(f"   {key:10s}: mean={vals.mean():.3f}ms  "
-              f"std={vals.std():.3f}ms  "
-              f"p99={np.percentile(vals, 99):.3f}ms")
+    g1_targets = np.array(g1_joint_targets_all)
+    tokens_arr = np.array(encoder_tokens_all)
 
-    fps_achieved = 1000.0 / stats_arr["total"].mean()
-    print(f"\n   Effective FPS: {fps_achieved:.1f} (target: {args.fps})")
+    print(f"\n   G1 targets range: [{g1_targets.min():.4f}, {g1_targets.max():.4f}]")
+    active = np.where(g1_targets.std(axis=0) > 0.01)[0]
+    print(f"   Active joints: {len(active)}/{NUM_G1_JOINTS}")
+    for j in active:
+        name = G1_JOINT_NAMES[j] if j < len(G1_JOINT_NAMES) else f"joint_{j}"
+        std = g1_targets[:, j].std()
+        rng = [g1_targets[:, j].min(), g1_targets[:, j].max()]
+        print(f"     {j:2d} {name:24s}: std={std:.4f}  range=[{rng[0]:.3f}, {rng[1]:.3f}]")
 
-    # ── Analyze outputs ───────────────────────────────────────
-    g1_targets = np.array(g1_joint_targets_all)  # (N, 29)
-    tokens = np.array(encoder_tokens_all)        # (N, 64)
+    if use_retarget:
+        # Compare with ground truth
+        gt_joints = gt_joint_pos[:n_frames]
+        diff = g1_targets - gt_joints
+        print(f"\n   Tracking error (vs GT): mean={np.abs(diff).mean():.4f} rad, "
+              f"max={np.abs(diff).max():.4f} rad")
 
-    print(f"\n   G1 joint targets range: [{g1_targets.min():.4f}, {g1_targets.max():.4f}]")
-    print(f"   G1 joint targets std (per joint):")
-    joint_stds = g1_targets.std(axis=0)
-    active_joints = np.where(joint_stds > 0.01)[0]
-    for j in active_joints:
-        print(f"     Joint {j:2d} ({G1_JOINT_NAMES[j]:20s}): "
-              f"std={joint_stds[j]:.4f}  "
-              f"range=[{g1_targets[:, j].min():.3f}, {g1_targets[:, j].max():.3f}]")
-
-    if len(active_joints) == 0:
-        print("     ⚠ No active joints detected (all near-zero). "
-              "The observation layout may need adjustment.")
-
-    print(f"\n   Encoder token stats: mean={tokens.mean():.4f}, "
-          f"std={tokens.std():.4f}, "
-          f"range=[{tokens.min():.4f}, {tokens.max():.4f}]")
-
-    # ── Generate visualization ────────────────────────────────
+    # ── Visualization ─────────────────────────────────────────
     print(f"\n🎬 Generating animation ({n_frames} frames)...")
 
     fig = plt.figure(figsize=(16, 8))
     fig.suptitle("SONIC × G1 × AMASS Demo", fontsize=14, fontweight="bold")
 
-    # Left panel: SMPL input skeleton
-    ax_smpl = fig.add_subplot(121, projection="3d")
-    ax_smpl.set_title("SMPL Input (Motion Capture)")
-
-    # Right panel: G1 output skeleton
+    ax_gt = fig.add_subplot(121, projection="3d")
     ax_g1 = fig.add_subplot(122, projection="3d")
-    ax_g1.set_title("G1 Output (SONIC Retarget)")
 
-    def set_axes_style(ax, x_range=(-0.6, 0.6), y_range=(-0.6, 0.6), z_range=(-0.1, 1.8)):
-        ax.set_xlim(*x_range)
-        ax.set_ylim(*y_range)
-        ax.set_zlim(*z_range)
+    # Compute centering for ground truth
+    gt_bodies = np.array(gt_bodies_all)
+
+    if use_retarget:
+        # Center on pelvis (body 0) XY, keep Z absolute
+        center_per_frame = gt_bodies[:, 0, :].copy()
+        center_per_frame[:, 2] = 0  # don't shift Z
+    else:
+        center_per_frame = gt_bodies[:, 0, :].copy()
+        center_per_frame[:, 2] = 0
+
+    def set_axes(ax, x=(-0.6, 0.6), y=(-0.6, 0.6), z=(-0.1, 1.6)):
+        ax.set_xlim(*x)
+        ax.set_ylim(*y)
+        ax.set_zlim(*z)
         ax.set_xlabel("X")
         ax.set_ylabel("Y")
         ax.set_zlabel("Z")
         ax.view_init(elev=15, azim=-60)
 
-    # Compute SMPL centering offset (center pelvis at origin)
-    smpl_arr = np.array(smpl_positions_all)  # (N, 24, 3)
-    pelvis_mean = smpl_arr[:, 0, :].mean(axis=0)
-
-    # Subsample frames for animation
+    # Subsample for animation
     anim_step = max(1, n_frames // args.max_anim_frames)
     anim_indices = list(range(0, n_frames, anim_step))
 
     def update(anim_idx):
         frame = anim_indices[anim_idx]
-        ax_smpl.cla()
+        ax_gt.cla()
         ax_g1.cla()
 
-        # ── SMPL skeleton ──
-        smpl_joints = smpl_arr[frame] - pelvis_mean + np.array([0, 0, 0.92])
-        ax_smpl.set_title(f"SMPL Input (frame {frame})")
-        set_axes_style(ax_smpl)
+        # ── Left: Ground truth ──
+        if use_retarget:
+            bodies = gt_bodies[frame] - center_per_frame[frame]
+            ax_gt.set_title(f"Ground Truth (frame {frame})")
+            set_axes(ax_gt)
 
-        # Draw bones
-        for (j1, j2) in SMPL_BONES:
-            p1, p2 = smpl_joints[j1], smpl_joints[j2]
-            ax_smpl.plot(
-                [p1[0], p2[0]], [p1[1], p2[1]], [p1[2], p2[2]],
-                "b-", linewidth=2, alpha=0.8,
-            )
-        # Draw joints
-        ax_smpl.scatter(
-            smpl_joints[:, 0], smpl_joints[:, 1], smpl_joints[:, 2],
-            c="blue", s=20, alpha=0.9,
-        )
+            for (b1, b2) in G1_BODY_BONES:
+                if b1 < len(bodies) and b2 < len(bodies):
+                    p1, p2 = bodies[b1], bodies[b2]
+                    ax_gt.plot([p1[0], p2[0]], [p1[1], p2[1]], [p1[2], p2[2]],
+                               "b-", linewidth=2, alpha=0.8)
+            ax_gt.scatter(bodies[:, 0], bodies[:, 1], bodies[:, 2],
+                          c="blue", s=15, alpha=0.8)
+        else:
+            # SMPL skeleton
+            smpl_joints = gt_bodies[frame] - center_per_frame[frame]
+            ax_gt.set_title(f"SMPL Input (frame {frame})")
+            set_axes(ax_gt)
 
-        # ── G1 skeleton ──
-        kp = g1_keypoints_all[frame]
-        ax_g1.set_title(f"G1 Output (frame {frame})")
-        set_axes_style(ax_g1)
+            for (j1, j2) in SMPL_BONES:
+                p1, p2 = smpl_joints[j1], smpl_joints[j2]
+                ax_gt.plot([p1[0], p2[0]], [p1[1], p2[1]], [p1[2], p2[2]],
+                           "b-", linewidth=2, alpha=0.8)
+            ax_gt.scatter(smpl_joints[:, 0], smpl_joints[:, 1], smpl_joints[:, 2],
+                          c="blue", s=15, alpha=0.8)
 
-        # Draw bones
-        for (name1, name2) in G1_BONES:
-            p1, p2 = kp[name1], kp[name2]
-            ax_g1.plot(
-                [p1[0], p2[0]], [p1[1], p2[1]], [p1[2], p2[2]],
-                "r-", linewidth=2.5, alpha=0.8,
-            )
-        # Draw joints
-        pts = np.array([kp[name] for name in G1_KEYPOINTS])
-        ax_g1.scatter(pts[:, 0], pts[:, 1], pts[:, 2], c="red", s=25, alpha=0.9)
+        # ── Right: G1 SONIC output ──
+        kp = joint_angles_to_keypoints(g1_joint_targets_all[frame])
+        ax_g1.set_title(f"G1 SONIC Output (frame {frame})")
+        set_axes(ax_g1)
+
+        for (n1, n2) in G1_SIMPLE_BONES:
+            if n1 in kp and n2 in kp:
+                p1, p2 = kp[n1], kp[n2]
+                ax_g1.plot([p1[0], p2[0]], [p1[1], p2[1]], [p1[2], p2[2]],
+                           "r-", linewidth=2.5, alpha=0.8)
+        pts = np.array([kp[n] for n in kp])
+        ax_g1.scatter(pts[:, 0], pts[:, 1], pts[:, 2], c="red", s=20, alpha=0.9)
 
         return []
 
-    n_anim = len(anim_indices)
-    anim = FuncAnimation(
-        fig, update, frames=n_anim,
-        interval=1000.0 / min(args.fps, 30),  # Cap display FPS at 30
-        blit=False,
-    )
+    anim = FuncAnimation(fig, update, frames=len(anim_indices),
+                         interval=1000.0 / min(fps, 30), blit=False)
 
-    # Save output
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    source_name = Path(args.retarget).stem if use_retarget else f"synthetic_{args.motion}"
+
     if args.save_gif:
-        gif_path = output_dir / f"sonic_g1_amass_{motion.source}.gif"
+        gif_path = output_dir / f"sonic_g1_{source_name}.gif"
         print(f"   Saving GIF: {gif_path}")
-        writer = PillowWriter(fps=min(args.fps, 25))
+        writer = PillowWriter(fps=min(fps, 25))
         anim.save(str(gif_path), writer=writer, dpi=80)
         print(f"   ✅ Saved: {gif_path} ({gif_path.stat().st_size / 1024:.0f} KB)")
 
-    if args.save_mp4:
-        mp4_path = output_dir / f"sonic_g1_amass_{motion.source}.mp4"
-        print(f"   Saving MP4: {mp4_path}")
-        try:
-            anim.save(str(mp4_path), writer="ffmpeg", fps=min(args.fps, 30), dpi=100)
-            print(f"   ✅ Saved: {mp4_path}")
-        except Exception as e:
-            print(f"   ⚠ MP4 save failed (ffmpeg required): {e}")
-
-    # Also save a static plot of joint trajectories
-    traj_path = output_dir / f"sonic_g1_joint_trajectories_{motion.source}.png"
+    # Joint trajectory plot
+    traj_path = output_dir / f"sonic_g1_trajectories_{source_name}.png"
     fig2, axes2 = plt.subplots(3, 1, figsize=(14, 10), sharex=True)
-    fig2.suptitle("G1 Joint Trajectories from SONIC Retarget", fontsize=13)
+    fig2.suptitle(f"G1 Joint Trajectories — {source_name}", fontsize=13)
 
-    time_axis = np.arange(g1_targets.shape[0]) / args.fps
+    time_axis = np.arange(g1_targets.shape[0]) / fps
 
-    # Plot torso joints
-    for j in range(3):
-        axes2[0].plot(time_axis, g1_targets[:, j], label=G1_JOINT_NAMES[j])
-    axes2[0].set_ylabel("Angle (rad)")
-    axes2[0].set_title("Torso Joints")
-    axes2[0].legend(fontsize=8)
+    # Waist joints
+    for j in [12, 13, 14]:
+        if j < len(G1_JOINT_NAMES):
+            axes2[0].plot(time_axis, g1_targets[:, j], label=G1_JOINT_NAMES[j])
+    if use_retarget:
+        for j in [12, 13, 14]:
+            axes2[0].plot(time_axis, gt_joint_pos[:n_frames, j], "--",
+                          alpha=0.5, label=f"GT_{G1_JOINT_NAMES[j]}")
+    axes2[0].set_title("Waist")
+    axes2[0].legend(fontsize=7)
     axes2[0].grid(True, alpha=0.3)
 
-    # Plot arm joints
-    for j in range(3, 13):
-        axes2[1].plot(time_axis, g1_targets[:, j], label=G1_JOINT_NAMES[j], alpha=0.7)
-    axes2[1].set_ylabel("Angle (rad)")
-    axes2[1].set_title("Arm Joints")
-    axes2[1].legend(fontsize=7, ncol=2)
+    # Arm joints
+    for j in range(15, 29):
+        if j < len(G1_JOINT_NAMES):
+            axes2[1].plot(time_axis, g1_targets[:, j], label=G1_JOINT_NAMES[j], alpha=0.7)
+    axes2[1].set_title("Arms")
+    axes2[1].legend(fontsize=6, ncol=3)
     axes2[1].grid(True, alpha=0.3)
 
-    # Plot leg joints
-    for j in range(13, 25):
-        axes2[2].plot(time_axis, g1_targets[:, j], label=G1_JOINT_NAMES[j], alpha=0.7)
-    axes2[2].set_ylabel("Angle (rad)")
+    # Leg joints
+    for j in range(0, 12):
+        if j < len(G1_JOINT_NAMES):
+            axes2[2].plot(time_axis, g1_targets[:, j], label=G1_JOINT_NAMES[j], alpha=0.7)
+    axes2[2].set_title("Legs")
     axes2[2].set_xlabel("Time (s)")
-    axes2[2].set_title("Leg Joints")
-    axes2[2].legend(fontsize=7, ncol=2)
+    axes2[2].legend(fontsize=6, ncol=3)
     axes2[2].grid(True, alpha=0.3)
 
     fig2.tight_layout()
     fig2.savefig(str(traj_path), dpi=150)
-    print(f"   ✅ Joint trajectory plot: {traj_path}")
+    print(f"   ✅ Trajectory plot: {traj_path}")
 
     plt.close("all")
-
     print(f"\n{'=' * 60}")
     print(f"  Demo complete!")
     print(f"{'=' * 60}")
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="SONIC × G1 × AMASS End-to-End Demo",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  # Synthetic walking motion, 5 seconds, save GIF
-  python -m cross_embodiment_retarget_demo.demos.sonic_g1_amass_demo --synthetic --duration 5 --save-gif
+    parser = argparse.ArgumentParser(description="SONIC × G1 × AMASS Demo")
 
-  # Synthetic dance, 10 seconds
-  python -m cross_embodiment_retarget_demo.demos.sonic_g1_amass_demo --synthetic --motion dance --duration 10 --save-gif
-
-  # Real AMASS data
-  python -m cross_embodiment_retarget_demo.demos.sonic_g1_amass_demo --amass path/to/CMU/01/01_01_poses.npz --save-gif
-
-  # CPU-only mode
-  python -m cross_embodiment_retarget_demo.demos.sonic_g1_amass_demo --synthetic --device cpu --save-gif
-""",
-    )
-
-    # Input source
     input_group = parser.add_mutually_exclusive_group()
-    input_group.add_argument("--amass", type=str, help="Path to AMASS .npz file")
-    input_group.add_argument(
-        "--synthetic", action="store_true", default=True,
-        help="Use synthetic motion data (default)",
-    )
+    input_group.add_argument("--retarget", type=str,
+                             help="Path to retargeted AMASS .npz (unimotion format)")
+    input_group.add_argument("--synthetic", action="store_true", default=True,
+                             help="Use synthetic motion (default)")
 
-    # Motion parameters
-    parser.add_argument(
-        "--motion", type=str, default="walk",
-        choices=["walk", "wave", "squat", "dance"],
-        help="Synthetic motion type (default: walk)",
-    )
-    parser.add_argument(
-        "--duration", type=float, default=5.0,
-        help="Duration in seconds (default: 5.0)",
-    )
-    parser.add_argument("--fps", type=float, default=50.0, help="Target FPS (default: 50)")
-
-    # Model
-    parser.add_argument(
-        "--model-dir", type=str,
-        default="cross_embodiment_retarget_demo/checkpoints/sonic",
-        help="Path to SONIC ONNX models directory",
-    )
-    parser.add_argument(
-        "--device", type=str, default="cuda", choices=["cuda", "cpu"],
-        help="Inference device (default: cuda)",
-    )
-
-    # Physics
-    parser.add_argument(
-        "--vel-limit", type=float, default=10.0,
-        help="Maximum joint velocity in rad/s (default: 10.0)",
-    )
-
-    # Output
-    parser.add_argument("--save-gif", action="store_true", help="Save animation as GIF")
-    parser.add_argument("--save-mp4", action="store_true", help="Save animation as MP4")
-    parser.add_argument(
-        "--output-dir", type=str,
-        default="cross_embodiment_retarget_demo/demos/output",
-        help="Output directory for saved files",
-    )
-    parser.add_argument(
-        "--max-frames", type=int, default=None,
-        help="Maximum number of frames to process",
-    )
-    parser.add_argument(
-        "--max-anim-frames", type=int, default=300,
-        help="Maximum frames in animation (subsamples if needed)",
-    )
+    parser.add_argument("--motion", default="walk", choices=["walk", "wave", "squat", "dance"])
+    parser.add_argument("--duration", type=float, default=5.0)
+    parser.add_argument("--fps", type=float, default=50.0)
+    parser.add_argument("--model-dir", default="cross_embodiment_retarget_demo/checkpoints/sonic")
+    parser.add_argument("--device", default="cuda", choices=["cuda", "cpu"])
+    parser.add_argument("--vel-limit", type=float, default=10.0)
+    parser.add_argument("--save-gif", action="store_true")
+    parser.add_argument("--save-mp4", action="store_true")
+    parser.add_argument("--output-dir", default="cross_embodiment_retarget_demo/demos/output")
+    parser.add_argument("--max-frames", type=int, default=None)
+    parser.add_argument("--max-anim-frames", type=int, default=300)
 
     args = parser.parse_args()
-
-    # Set up logging
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(name)s %(levelname)s %(message)s",
-    )
-
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
     run_demo(args)
 
 
