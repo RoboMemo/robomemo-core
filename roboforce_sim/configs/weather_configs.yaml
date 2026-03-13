@@ -1,0 +1,129 @@
+# RoboForce — Weather Configuration Presets
+# ==========================================
+# Lighting and atmospheric settings for different conditions.
+# Referenced by the environment via the `weather` field.
+
+# Default weather (used when none specified)
+default: "day"
+
+presets:
+
+  # --- Daytime: harsh desert sunlight ---
+  day:
+    description: "Clear desert day with harsh sunlight and sharp shadows"
+    lighting:
+      dome_light:
+        intensity: 1500.0
+        color: [1.0, 0.98, 0.92]    # Warm white
+        texture: ""                   # Use default sky HDRI if available
+      distant_light:
+        intensity: 50000.0
+        color: [1.0, 0.95, 0.85]    # Direct sunlight
+        direction: [0.3, -0.7, -0.6] # Sun position (elevated, slightly south)
+        angle: 0.53                   # Angular diameter (degrees) — sun size
+        shadow_enabled: true
+        shadow_resolution: 2048
+      ambient:
+        intensity: 500.0
+        color: [0.8, 0.85, 1.0]     # Cool sky fill
+    atmosphere:
+      fog_enabled: false
+      fog_density: 0.0
+      particles_enabled: false
+    exposure:
+      auto_exposure: false
+      exposure_value: 10.0           # Bright scene
+    ground_temperature_k: 330.0      # ~57°C desert surface
+
+  # --- Nighttime: headlamp/flashlight only ---
+  night:
+    description: "Desert night with robot-mounted spotlight illumination"
+    lighting:
+      dome_light:
+        intensity: 5.0               # Faint starlight
+        color: [0.2, 0.2, 0.35]     # Dark blue sky
+        texture: ""
+      distant_light:
+        intensity: 50.0              # Moonlight
+        color: [0.6, 0.65, 0.8]     # Cool blue moonlight
+        direction: [0.1, -0.3, -0.8]
+        angle: 0.5
+        shadow_enabled: true
+        shadow_resolution: 1024
+      ambient:
+        intensity: 2.0
+        color: [0.15, 0.15, 0.25]
+    # Robot headlamp spotlight (attached to robot head)
+    robot_spotlight:
+      enabled: true
+      intensity: 25000.0
+      color: [1.0, 0.98, 0.9]       # LED white
+      cone_angle_deg: 45.0
+      focus: 0.7
+      position_offset: [0.0, 0.05, 1.85]  # Slightly above head camera
+      direction: [0.0, -0.5, -0.5]         # Forward and down
+      shadow_enabled: true
+      shadow_resolution: 1024
+    atmosphere:
+      fog_enabled: false
+      fog_density: 0.0
+      particles_enabled: false
+    exposure:
+      auto_exposure: false
+      exposure_value: 3.0            # Dark scene, camera adjusted
+    ground_temperature_k: 290.0      # ~17°C nighttime desert
+
+  # --- Dusty/sandstorm conditions ---
+  dusty:
+    description: "Desert sandstorm with reduced visibility and scattered lighting"
+    lighting:
+      dome_light:
+        intensity: 800.0
+        color: [0.9, 0.78, 0.5]     # Warm yellow-brown tint
+        texture: ""
+      distant_light:
+        intensity: 15000.0
+        color: [0.95, 0.85, 0.6]    # Sun filtered through dust
+        direction: [0.3, -0.7, -0.6]
+        angle: 5.0                    # Large angular size (scattered)
+        shadow_enabled: true
+        shadow_resolution: 512       # Soft shadows
+      ambient:
+        intensity: 400.0
+        color: [0.85, 0.75, 0.5]    # Dust-tinted ambient
+    atmosphere:
+      fog_enabled: true
+      fog_density: 0.08             # Moderate fog for dust simulation
+      fog_color: [0.8, 0.7, 0.5]   # Sand-colored fog
+      fog_start_distance: 2.0       # Fog starts nearby
+      fog_end_distance: 25.0
+      particles_enabled: true
+      particle_config:
+        type: "sand"
+        density: 500                 # Particles per m³
+        velocity: [3.0, 1.0, 0.5]   # Wind-driven direction
+        size_range: [0.001, 0.003]   # Small sand grains
+        color: [0.75, 0.65, 0.45, 0.6]
+        lifetime_s: 5.0
+    # Robot headlamp for visibility
+    robot_spotlight:
+      enabled: true
+      intensity: 20000.0
+      color: [1.0, 0.95, 0.85]
+      cone_angle_deg: 50.0
+      focus: 0.5                     # Wide spread in dust
+      position_offset: [0.0, 0.05, 1.85]
+      direction: [0.0, -0.5, -0.5]
+      shadow_enabled: false          # Shadows unreliable in dust
+    exposure:
+      auto_exposure: true
+      exposure_value: 7.0
+    ground_temperature_k: 325.0
+
+# Domain randomization ranges for weather (applied on top of presets)
+randomization:
+  dome_light_intensity_range: [0.7, 1.3]   # Multiplier
+  distant_light_intensity_range: [0.6, 1.4]
+  sun_direction_noise_deg: 15.0             # Random perturbation
+  fog_density_range: [0.5, 1.5]            # Multiplier on preset value
+  wind_speed_range: [0.0, 5.0]             # m/s (affects particles)
