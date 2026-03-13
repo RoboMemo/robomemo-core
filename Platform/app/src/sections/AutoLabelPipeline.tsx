@@ -84,6 +84,8 @@ interface Episode {
   id: string;
   name: string;
   videoPath?: string;
+  h5_path?: string;   // actual video path stored in DB
+  datasetId?: string;
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -380,9 +382,15 @@ export default function AutoLabelPipeline() {
                   <SelectValue placeholder="Select episode" />
                 </SelectTrigger>
                 <SelectContent>
-                  {episodes.filter((e: Episode) => e.videoPath).map((e: Episode) => (
-                    <SelectItem key={e.id} value={e.videoPath!}>{e.name}</SelectItem>
-                  ))}
+                  {episodes.filter((e: Episode) => e.videoPath || e.h5_path).map((e: Episode) => {
+                    const vpath = e.videoPath || e.h5_path || '';
+                    // h5_path is relative like "data/datasets/...", make it absolute
+                    const absPath = vpath.startsWith('/') ? vpath
+                      : `/Volumes/MOVESPEED/Project/RoboMemo/Platform/backend/${vpath}`;
+                    return (
+                      <SelectItem key={e.id} value={absPath}>{e.name}</SelectItem>
+                    );
+                  })}
                 </SelectContent>
               </Select>
             </div>
