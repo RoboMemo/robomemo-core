@@ -1,0 +1,7 @@
+{
+  "pose_detection_rate": 0.25,
+  "arm_visibility_rate": 0.25,
+  "hand_detection_rate": 0.8125,
+  "both_hands_rate": 0.0,
+  "vio_coverage": 1.0
+}

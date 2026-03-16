@@ -1,0 +1,5 @@
+move-ugc-python/
+rokoko-api-examples/
+*.task
+test_ego_video.mp4
+test_frames/
