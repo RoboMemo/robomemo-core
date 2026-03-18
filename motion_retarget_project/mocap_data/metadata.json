@@ -1,0 +1,35 @@
+{
+  "joint_names": [
+    "Hips",
+    "Spine",
+    "Chest",
+    "Neck",
+    "Head",
+    "LeftShoulder",
+    "LeftArm",
+    "LeftForeArm",
+    "LeftHand",
+    "RightShoulder",
+    "RightArm",
+    "RightForeArm",
+    "RightHand",
+    "LeftHip",
+    "LeftKnee",
+    "LeftAnkle",
+    "LeftToe",
+    "RightHip",
+    "RightKnee",
+    "RightAnkle",
+    "RightToe",
+    "LeftEye",
+    "RightEye",
+    "Jaw"
+  ],
+  "num_joints": 24,
+  "fps": 30,
+  "motions": [
+    "walking",
+    "running",
+    "jumping"
+  ]
+}
