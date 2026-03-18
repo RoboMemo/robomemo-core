@@ -1,1 +1,8 @@
 venv_old/
+
+# Local datasets and data files (too large for GitHub)
+backend/data/
+backend/venv/
+node_modules/
+app/node_modules/
+
