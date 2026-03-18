@@ -20,7 +20,6 @@ import {
   ShieldCheck,
   Package,
   Zap,
-  Bot,
   DollarSign
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -44,22 +43,19 @@ import TaskManagement from '@/sections/TaskManagement';
 import QualityControl from '@/sections/QualityControl';
 import OrderManagement from '@/sections/OrderManagement';
 import BatchOperations from '@/sections/BatchOperations';
-import RoboForceIntegration from '@/sections/RoboForceIntegration';
 import BillingManagement from '@/sections/BillingManagement';
-import AutoLabelPipeline from '@/sections/AutoLabelPipeline';
 import api from '@/services/api';
 import type { User } from '@/types';
 import './App.css';
 
-type Tab = 'datasets' | 'collection' | 'annotation' | 'visualization' | 'simulators' | 'augmentation' | 'autoannotation' | 'structuredvqa' | 'autolabel' | 'stats' | 'users' | 'mytasks' | 'tasks' | 'quality' | 'orders' | 'batch' | 'roboforce' | 'billing';
+type Tab = 'datasets' | 'collection' | 'annotation' | 'visualization' | 'simulators' | 'augmentation' | 'autoannotation' | 'videoanalysis' | 'stats' | 'users' | 'mytasks' | 'tasks' | 'quality' | 'orders' | 'batch' | 'billing';
 
 const tabs = [
   { id: 'datasets' as Tab, label: 'Datasets', icon: Database },
   { id: 'collection' as Tab, label: 'Collection', icon: Play },
   { id: 'annotation' as Tab, label: 'Annotation', icon: Tag },
   { id: 'autoannotation' as Tab, label: 'Auto-Annotation', icon: Wand2 },
-  { id: 'structuredvqa' as Tab, label: 'Structured VQA', icon: BrainCircuit },
-  { id: 'autolabel' as Tab, label: 'Auto Label', icon: Wand2 },
+  { id: 'videoanalysis' as Tab, label: 'Video Analysis', icon: BrainCircuit },
   { id: 'visualization' as Tab, label: 'Visualization', icon: BarChart3 },
   { id: 'simulators' as Tab, label: 'Simulators', icon: Cpu },
   { id: 'augmentation' as Tab, label: 'Augmentation', icon: Sparkles },
@@ -69,7 +65,6 @@ const tabs = [
   { id: 'quality' as Tab, label: 'Quality Control', icon: ShieldCheck },
   { id: 'orders' as Tab, label: 'Orders', icon: Package },
   { id: 'batch' as Tab, label: 'Batch Ops', icon: Zap },
-  { id: 'roboforce' as Tab, label: 'RoboForce', icon: Bot },
   { id: 'billing' as Tab, label: 'Billing', icon: DollarSign },  { id: 'users' as Tab, label: 'Users', icon: Users },
 ];
 
@@ -149,10 +144,8 @@ function App() {
         return <DataAugmentation />;
       case 'autoannotation':
         return <AutoAnnotation />;
-      case 'structuredvqa':
+      case 'videoanalysis':
         return <StructuredVQA />;
-      case 'autolabel':
-        return <AutoLabelPipeline />;
       case 'stats':
         return <PlatformStats />;
       case 'mytasks':
@@ -165,9 +158,8 @@ function App() {
         return user?.role === 'platform_admin' || user?.role === 'data_admin' ? <OrderManagement /> : <div className="text-center py-12 text-muted-foreground">Access denied</div>;
       case 'batch':
         return user?.role === 'platform_admin' || user?.role === 'data_admin' ? <BatchOperations /> : <div className="text-center py-12 text-muted-foreground">Access denied</div>;
-      case 'roboforce':
       case 'billing':
-        return <BillingManagement />;        return user?.role === 'platform_admin' || user?.role === 'data_admin' ? <RoboForceIntegration /> : <div className="text-center py-12 text-muted-foreground">Access denied</div>;
+        return <BillingManagement />;
       case 'users':
         return user?.role === 'platform_admin' ? <UserManagement /> : <div className="text-center py-12 text-muted-foreground">Access denied</div>;
       default:
@@ -187,7 +179,6 @@ function App() {
     if (tab.id === 'quality') return user.role === 'platform_admin' || user.role === 'reviewer';
     if (tab.id === 'orders') return user.role === 'platform_admin' || user.role === 'data_admin';
     if (tab.id === 'batch') return user.role === 'platform_admin' || user.role === 'data_admin';
-    if (tab.id === 'roboforce') return user.role === 'platform_admin' || user.role === 'data_admin';
     if (tab.id === 'billing') return user.role === 'platform_admin' || user.role === 'data_admin';    return true;
   });
 

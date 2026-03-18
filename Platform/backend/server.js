@@ -806,7 +806,8 @@ app.post('/api/vlm/structured-analysis', vlmLimiter, async (req, res) => {
     // Pass frames dir for grounding reference
     args.push('--frames-dir', framesDir);
 
-    const pythonProcess = spawn('python', [pythonScript, ...args]);
+    const pythonExecutableVlm = path.join(__dirname, 'venv', 'bin', 'python3');
+    const pythonProcess = spawn(pythonExecutableVlm, [pythonScript, ...args]);
 
     let resultData = '';
     let errorData = '';

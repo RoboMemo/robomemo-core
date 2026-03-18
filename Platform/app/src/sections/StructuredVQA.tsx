@@ -821,10 +821,10 @@ export default function StructuredVQA() {
         <div>
           <h1 className="text-xl font-bold flex items-center gap-2">
             <Layers className="w-5 h-5 text-primary" />
-            Structured VQA Analysis
+            Video Analysis
           </h1>
           <p className="text-sm text-muted-foreground mt-0.5">
-            使用顶级 VLM 将机器人视频分解为 7 类结构化问答标注
+            使用 VLM 将机器人视频分解为 7 类结构化问答标注
           </p>
         </div>
         <div className="flex items-center gap-2">
