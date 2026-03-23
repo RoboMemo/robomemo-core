@@ -24,13 +24,31 @@ const app = express();
 const port = process.env.PORT || 3001;
 
 // ─── Security Middleware ──────────────────────────────────────────────────────
-// Helmet: security headers (CSP, HSTS, X-Frame-Options, etc.)
-app.use(helmet({ contentSecurityPolicy: false })); // CSP off for SPA
 
-// CORS: restrict origins in production
+// CORS: must be before helmet so preflight OPTIONS gets handled
 const corsOrigins = (process.env.CORS_ORIGINS || 'http://localhost:5173,http://localhost:3000')
   .split(',').map(s => s.trim());
-app.use(cors({ origin: corsOrigins, credentials: true }));
+app.use(cors({ 
+  origin: (origin, callback) => {
+    // Allow requests with no origin (mobile apps, curl, etc.)
+    if (!origin) return callback(null, true);
+    // Allow configured origins
+    if (corsOrigins.includes(origin)) return callback(null, true);
+    // Allow Cloudflare Pages and trycloudflare domains
+    if (origin.endsWith('.pages.dev') || origin.endsWith('.trycloudflare.com')) return callback(null, true);
+    callback(null, false);
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-API-Key']
+}));
+
+// Helmet: security headers (CSP, HSTS, X-Frame-Options, etc.)
+app.use(helmet({ 
+  contentSecurityPolicy: false,
+  crossOriginResourcePolicy: { policy: 'cross-origin' },
+  crossOriginOpenerPolicy: false
+}));
 
 app.use(express.json({ limit: '50mb' }));
 app.use(morgan('dev'));
@@ -52,7 +70,7 @@ const upload = multer({ storage });
 
 // Data management — SQLite via db.js
 const DATA_DIR = path.join(__dirname, 'data'); // kept for GenRobot static files
-const { db, Datasets, Episodes, Annotations, Collections, Lineage, syncFromJSON, getStats, getFullStats, getDatasetStats, getAnnotationStats, getTimeline } = require('./db');
+const { db, Datasets, Episodes, Annotations, Collections, Lineage, Tasks, Reviews, Orders, Billing, syncFromJSON, getStats, getFullStats, getDatasetStats, getAnnotationStats, getTimeline } = require('./db');
 
 // Initialize auth & audit on the shared DB instance
 initAuth(db);
@@ -60,6 +78,16 @@ auditLog.initAuditLog(db);
 
 // Serve uploaded videos as static (for browser preview)
 app.use('/uploads/videos', express.static(path.join(__dirname, 'uploads', 'videos')));
+
+// Serve downloaded dataset files (LeRobot videos, GenRobot H5, etc.)
+app.use('/data', express.static(path.join(__dirname, 'data'), {
+  setHeaders: (res, filePath) => {
+    if (filePath.endsWith('.mp4')) {
+      res.setHeader('Content-Type', 'video/mp4');
+      res.setHeader('Accept-Ranges', 'bytes');
+    }
+  }
+}));
 
 // Apply geo-fence (blocks CN/HK IPs)
 app.use(geoFenceMiddleware);
@@ -349,6 +377,92 @@ app.delete('/api/datasets/:id', (req, res) => {
 
 app.get('/api/datasets/:id/episodes', (req, res) => {
   res.json(Episodes.getByDataset(req.params.id));
+});
+
+// Get video/media URLs for a specific episode
+app.get('/api/episodes/:id/media', (req, res) => {
+  const episode = Episodes.getById(req.params.id);
+  if (!episode) return res.status(404).json({ error: 'Episode not found' });
+  
+  const dataset = Datasets.getById(episode.datasetId);
+  if (!dataset) return res.status(404).json({ error: 'Dataset not found' });
+  
+  const sensorConfig = typeof dataset.sensorConfig === 'string' 
+    ? JSON.parse(dataset.sensorConfig || '{}') 
+    : (dataset.sensorConfig || {});
+  const sensors = sensorConfig.sensors || [];
+  
+  const media = { videos: [], images: [], dataFiles: [] };
+  const dataDir = path.join(__dirname, 'data');
+  
+  if (dataset.format === 'lerobot_v3') {
+    // LeRobot v3: check for video files per camera
+    const dsSource = dataset.source || '';
+    const dsId = dataset.id;
+    
+    // Map dataset IDs to local directory names
+    const dirMap = {
+      'lerobot_pusht': 'lerobot_pusht',
+      'lerobot_xarm_lift': 'lerobot_xarm_lift',
+      'aloha_static_cups': 'lerobot_aloha_cups',
+      'aloha_mobile_shrimp': 'lerobot_aloha_shrimp',
+    };
+    const localDir = dirMap[dsId];
+    if (localDir) {
+      const dsPath = path.join(dataDir, 'datasets', localDir);
+      // Read info.json to get camera keys
+      try {
+        const info = JSON.parse(fs.readFileSync(path.join(dsPath, 'meta', 'info.json'), 'utf-8'));
+        const cameraKeys = Object.keys(info.features || {}).filter(k => k.includes('image'));
+        
+        for (const camKey of cameraKeys) {
+          // Find video file for this camera
+          const videoDir = path.join(dsPath, 'videos', camKey, 'chunk-000');
+          if (fs.existsSync(videoDir)) {
+            const videoFiles = fs.readdirSync(videoDir).filter(f => f.endsWith('.mp4'));
+            for (const vf of videoFiles) {
+              const feat = info.features[camKey] || {};
+              media.videos.push({
+                camera: camKey.replace('observation.images.', '').replace('observation.', ''),
+                url: `/data/datasets/${localDir}/videos/${camKey}/chunk-000/${vf}`,
+                resolution: feat.shape ? `${feat.shape[1]}x${feat.shape[0]}` : 'unknown',
+                codec: feat.video_info?.['video.codec'] || 'unknown',
+                fps: feat.video_info?.['video.fps'] || info.fps
+              });
+            }
+          }
+        }
+      } catch (e) {
+        console.error('Error reading LeRobot meta:', e.message);
+      }
+    }
+  } else if (dataset.format === 'h5') {
+    // GenRobot H5: return H5 file path  
+    if (episode.h5_path) {
+      // h5_path is relative to backend/data/, e.g. "genrobot_open_dataset/..."
+      const cleanPath = episode.h5_path.replace(/^data\//, '');
+      media.dataFiles.push({
+        type: 'h5',
+        path: episode.h5_path,
+        url: `/data/${cleanPath}`,
+        sensors: ['mid_fisheye_color', 'imu_6axis', 'tactile_left', 'tactile_right']
+      });
+    }
+  }
+  
+  // Add sensor metadata
+  media.sensorConfig = sensorConfig;
+  media.episodeInfo = {
+    id: episode.id,
+    name: episode.name,
+    frameCount: episode.frameCount,
+    duration: episode.duration,
+    fps: episode.fps,
+    skill: episode.skill,
+    bimanual: episode.bimanual
+  };
+  
+  res.json(media);
 });
 
 // ========== COLLECTIONS API ==========
@@ -692,7 +806,8 @@ app.post('/api/vlm/structured-analysis', vlmLimiter, async (req, res) => {
     // Pass frames dir for grounding reference
     args.push('--frames-dir', framesDir);
 
-    const pythonProcess = spawn('python', [pythonScript, ...args]);
+    const pythonExecutableVlm = path.join(__dirname, 'venv', 'bin', 'python3');
+    const pythonProcess = spawn(pythonExecutableVlm, [pythonScript, ...args]);
 
     let resultData = '';
     let errorData = '';
@@ -868,7 +983,226 @@ app.get('/api/vlm/local-models', async (req, res) => {
   }
 });
 
+// 统一的 VLM 模型列表（用于 Auto-Annotation）
+app.get('/api/vlm/models', async (req, res) => {
+  const models = [
+    {
+      id: 'gemini-2.5-pro',
+      name: 'Google Gemini 2.5 Pro',
+      provider: 'gemini',
+      description: '最新 Gemini 2.5 Pro，支持深度思考模式',
+      capabilities: ['video', 'temporal', 'spatial', 'reasoning'],
+      maxVideoLength: 3600,
+      languageSupport: ['en', 'zh', 'ja', 'ko']
+    },
+    {
+      id: 'claude-3-5-sonnet',
+      name: 'Claude 3.5 Sonnet',
+      provider: 'claude',
+      description: '强推理能力，擅长结构化输出',
+      capabilities: ['video', 'temporal', 'spatial', 'reasoning'],
+      maxVideoLength: 1800,
+      languageSupport: ['en', 'zh', 'ja', 'ko']
+    },
+    {
+      id: 'gpt-4o',
+      name: 'GPT-4o',
+      provider: 'openai',
+      description: '高质量多模态模型',
+      capabilities: ['video', 'temporal', 'spatial', 'reasoning'],
+      maxVideoLength: 1800,
+      languageSupport: ['en', 'zh', 'ja', 'ko']
+    }
+  ];
+
+  // 添加本地 Ollama 模型
+  try {
+    const OLLAMA_URL = 'http://localhost:11434';
+    const response = await fetch(`${OLLAMA_URL}/api/tags`);
+    const data = await response.json();
+    const VISION_TAGS = ['llava', 'llama3.2-vision', 'minicpm-v', 'bakllava', 'moondream', 'minicpm'];
+    const all = data.models || [];
+    const vision = all.filter(m => VISION_TAGS.some(t => m.name.toLowerCase().includes(t)));
+    const ollamaModels = vision.map(m => ({
+      id: `ollama-${m.name}`,
+      name: `Ollama: ${m.name}`,
+      provider: 'ollama',
+      description: '本地运行，完全免费',
+      capabilities: ['video', 'temporal', 'spatial'],
+      maxVideoLength: 600,
+      languageSupport: ['en', 'zh']
+    }));
+    models.push(...ollamaModels);
+  } catch (err) {
+    // Ollama 未运行，跳过
+  }
+
+  res.json(models);
+});
+
 // ========== END STRUCTURED VQA ANALYSIS API ==========
+
+// ========== AUTO-LABEL PIPELINE API ==========
+
+const autoLabelJobs = {};
+const autoLabelResults = [];
+
+// POST /api/auto-label/run — Run full pipeline on a video
+app.post('/api/auto-label/run', authMiddleware, (req, res) => {
+  const { videoPath, model, ollamaUrl, numFrames } = req.body;
+  if (!videoPath) {
+    return res.status(400).json({ error: 'videoPath is required' });
+  }
+
+  const jobId = `autolabel_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+  const pythonExecutable = path.join(__dirname, 'venv', 'bin', 'python3');
+  const scriptPath = path.join(__dirname, 'auto_label_pipeline.py');
+
+  // Resolve video path relative to backend dir if not absolute
+  let resolvedVideoPath = videoPath;
+  if (!path.isAbsolute(videoPath)) {
+    resolvedVideoPath = path.join(__dirname, videoPath);
+  }
+
+  const args = [scriptPath, resolvedVideoPath];
+  if (model) { args.push('--model', model); }
+  if (ollamaUrl) { args.push('--ollama-url', ollamaUrl); }
+  if (numFrames) { args.push('--num-frames', String(numFrames)); }
+
+  autoLabelJobs[jobId] = {
+    id: jobId,
+    status: 'processing',
+    videoPath: resolvedVideoPath,
+    model: model || 'scomper/minicpm-v2.5:latest',
+    createdAt: new Date().toISOString(),
+    progress: 0,
+    logs: [],
+  };
+
+  let stdout = '';
+  let stderr = '';
+
+  const proc = spawn(pythonExecutable, args);
+
+  proc.stdout.on('data', (data) => {
+    stdout += data.toString();
+  });
+
+  proc.stderr.on('data', (data) => {
+    const line = data.toString().trim();
+    stderr += line + '\n';
+    autoLabelJobs[jobId].logs.push(line);
+    // Parse stage progress from log lines
+    if (line.includes('[Stage 1]')) autoLabelJobs[jobId].progress = 10;
+    else if (line.includes('[Stage 2]')) autoLabelJobs[jobId].progress = 30;
+    else if (line.includes('[Stage 3]')) autoLabelJobs[jobId].progress = 60;
+    else if (line.includes('[Stage 4]')) autoLabelJobs[jobId].progress = 80;
+    else if (line.includes('Pipeline Complete')) autoLabelJobs[jobId].progress = 100;
+  });
+
+  proc.on('close', (code) => {
+    if (code === 0 && stdout.trim()) {
+      try {
+        const result = JSON.parse(stdout.trim());
+        autoLabelJobs[jobId].status = 'completed';
+        autoLabelJobs[jobId].progress = 100;
+        autoLabelJobs[jobId].result = result;
+        autoLabelResults.push(result);
+      } catch (e) {
+        autoLabelJobs[jobId].status = 'failed';
+        autoLabelJobs[jobId].error = `Failed to parse result: ${e.message}`;
+      }
+    } else {
+      autoLabelJobs[jobId].status = 'failed';
+      autoLabelJobs[jobId].error = stderr || `Process exited with code ${code}`;
+    }
+    autoLabelJobs[jobId].completedAt = new Date().toISOString();
+  });
+
+  proc.on('error', (err) => {
+    autoLabelJobs[jobId].status = 'failed';
+    autoLabelJobs[jobId].error = `Failed to spawn process: ${err.message}`;
+    autoLabelJobs[jobId].completedAt = new Date().toISOString();
+  });
+
+  res.json({ jobId, status: 'processing' });
+});
+
+// GET /api/auto-label/jobs/:jobId — Get job status/result
+app.get('/api/auto-label/jobs/:jobId', authMiddleware, (req, res) => {
+  const job = autoLabelJobs[req.params.jobId];
+  if (!job) return res.status(404).json({ error: 'Job not found' });
+  res.json(job);
+});
+
+// GET /api/auto-label/results — List all labeled episodes
+app.get('/api/auto-label/results', authMiddleware, (req, res) => {
+  res.json(autoLabelResults);
+});
+
+// POST /api/auto-label/export-lerobot — Export labels to LeRobot format
+app.post('/api/auto-label/export-lerobot', authMiddleware, (req, res) => {
+  const { episodeIds, outputDir, robotType } = req.body;
+  if (!outputDir) {
+    return res.status(400).json({ error: 'outputDir is required' });
+  }
+
+  // Filter results by episodeIds if provided
+  let episodes = autoLabelResults;
+  if (episodeIds && Array.isArray(episodeIds) && episodeIds.length > 0) {
+    episodes = autoLabelResults.filter(r => episodeIds.includes(r.episode_id));
+  }
+  if (episodes.length === 0) {
+    return res.status(400).json({ error: 'No labeled episodes found' });
+  }
+
+  // Write episodes to a temp JSONL file
+  const tempJsonl = path.join(__dirname, `temp_export_${Date.now()}.jsonl`);
+  const fs = require('fs');
+  fs.writeFileSync(tempJsonl, episodes.map(e => JSON.stringify(e)).join('\n') + '\n');
+
+  const pythonExecutable = path.join(__dirname, 'venv', 'bin', 'python3');
+  const scriptPath = path.join(__dirname, 'lerobot_exporter.py');
+
+  let resolvedOutputDir = outputDir;
+  if (!path.isAbsolute(outputDir)) {
+    resolvedOutputDir = path.join(__dirname, outputDir);
+  }
+
+  const args = [scriptPath, tempJsonl, '--output-dir', resolvedOutputDir];
+  if (robotType) { args.push('--robot-type', robotType); }
+
+  let stdout = '';
+  let stderr = '';
+
+  const proc = spawn(pythonExecutable, args);
+
+  proc.stdout.on('data', (data) => { stdout += data.toString(); });
+  proc.stderr.on('data', (data) => { stderr += data.toString(); });
+
+  proc.on('close', (code) => {
+    // Clean up temp file
+    try { fs.unlinkSync(tempJsonl); } catch (_) {}
+
+    if (code === 0 && stdout.trim()) {
+      try {
+        const result = JSON.parse(stdout.trim());
+        res.json({ success: true, ...result });
+      } catch (e) {
+        res.json({ success: true, message: 'Export completed', outputDir: resolvedOutputDir });
+      }
+    } else {
+      res.status(500).json({ error: stderr || `Export failed with code ${code}` });
+    }
+  });
+
+  proc.on('error', (err) => {
+    try { fs.unlinkSync(tempJsonl); } catch (_) {}
+    res.status(500).json({ error: `Failed to spawn export process: ${err.message}` });
+  });
+});
+
+// ========== END AUTO-LABEL PIPELINE API ==========
 
 // ─── DB management endpoints ──────────────────────────────────────────────────
 /** POST /api/db/sync — re-import datasets/episodes/annotations from JSON files
@@ -1944,6 +2278,516 @@ app.listen(port, () => {
   console.log('[DB] SQLite ready —', require('./db').getStats());
 });
 
+// ========== TASK MANAGEMENT API ==========
+
+// GET /api/tasks/stats — must be before :id route
+app.get('/api/tasks/stats', authMiddleware, requireRole('platform_admin', 'reviewer', 'data_admin'), (req, res) => {
+  const all = Tasks.getAll();
+  const byStatus = {};
+  const byType = {};
+  const byPriority = {};
+  const byAssignee = {};
+  for (const t of all) {
+    byStatus[t.status] = (byStatus[t.status] || 0) + 1;
+    byType[t.type] = (byType[t.type] || 0) + 1;
+    byPriority[t.priority] = (byPriority[t.priority] || 0) + 1;
+    if (t.assignedTo) byAssignee[t.assignedTo] = (byAssignee[t.assignedTo] || 0) + 1;
+  }
+  res.json({ total: all.length, byStatus, byType, byPriority, byAssignee });
+});
+
+// GET /api/tasks/my — current user's tasks
+app.get('/api/tasks/my', authMiddleware, (req, res) => {
+  res.json(Tasks.getByUser(req.user.userId));
+});
+
+// POST /api/tasks — create task (admin/reviewer)
+app.post('/api/tasks', authMiddleware, requireRole('platform_admin', 'reviewer', 'data_admin'), (req, res) => {
+  const task = Tasks.insert({ ...req.body, assignedBy: req.user.userId });
+  auditLog.write({ event: 'TASK_CREATE', userId: req.user.userId, action: 'create', resource: `task:${task.id}`, result: 'success' });
+  res.status(201).json(task);
+});
+
+// GET /api/tasks — all tasks (admin/reviewer)
+app.get('/api/tasks', authMiddleware, requireRole('platform_admin', 'reviewer', 'data_admin'), (req, res) => {
+  const { status } = req.query;
+  if (status) return res.json(Tasks.getByStatus(status));
+  res.json(Tasks.getAll());
+});
+
+// GET /api/tasks/:id — task detail
+app.get('/api/tasks/:id', authMiddleware, (req, res) => {
+  const task = Tasks.getById(req.params.id);
+  if (!task) return res.status(404).json({ error: 'Task not found' });
+  res.json(task);
+});
+
+// PUT /api/tasks/:id — update task
+app.put('/api/tasks/:id', authMiddleware, (req, res) => {
+  const task = Tasks.update(req.params.id, req.body);
+  if (!task) return res.status(404).json({ error: 'Task not found' });
+  auditLog.write({ event: 'TASK_UPDATE', userId: req.user.userId, action: 'update', resource: `task:${req.params.id}`, result: 'success' });
+  res.json(task);
+});
+
+// PUT /api/tasks/:id/status — update task status
+app.put('/api/tasks/:id/status', authMiddleware, (req, res) => {
+  const { status } = req.body;
+  if (!status) return res.status(400).json({ error: 'status required' });
+  const updates = { status };
+  if (status === 'in_progress') updates.startedAt = new Date().toISOString();
+  if (status === 'completed') updates.completedAt = new Date().toISOString();
+  const task = Tasks.update(req.params.id, updates);
+  if (!task) return res.status(404).json({ error: 'Task not found' });
+  auditLog.write({ event: 'TASK_STATUS', userId: req.user.userId, action: 'update', resource: `task:${req.params.id}`, details: { status }, result: 'success' });
+  res.json(task);
+});
+
+// DELETE /api/tasks/:id — delete task (admin)
+app.delete('/api/tasks/:id', authMiddleware, requireRole('platform_admin'), (req, res) => {
+  const existing = Tasks.getById(req.params.id);
+  if (!existing) return res.status(404).json({ error: 'Task not found' });
+  Tasks.delete(req.params.id);
+  auditLog.write({ event: 'TASK_DELETE', userId: req.user.userId, action: 'delete', resource: `task:${req.params.id}`, result: 'success' });
+  res.json({ success: true });
+});
+
+// ========== ROBOFORCE INTEGRATION API ==========
+
+// RoboForce Titan sensor presets
+const ROBOFORCE_PRESETS = {
+  titan_standard: {
+    name: 'RoboForce Titan Standard',
+    description: 'Standard Titan configuration with RGB-D cameras and F/T sensors',
+    sensors: [
+      { type: 'rgbd', name: 'RGBD-Front', location: 'end-effector', resolution: '1280x720', fps: 30 },
+      { type: 'rgbd', name: 'RGBD-Left', location: 'left-shoulder', resolution: '1280x720', fps: 30 },
+      { type: 'rgbd', name: 'RGBD-Right', location: 'right-shoulder', resolution: '1280x720', fps: 30 },
+      { type: 'ft_6axis', name: 'FT-Left', location: 'left-wrist', range: '[-300,300]N', resolution: 0.1 },
+      { type: 'ft_6axis', name: 'FT-Right', location: 'right-wrist', range: '[-300,300]N', resolution: 0.1 },
+    ],
+  },
+};
+
+// GET /api/roboforce/sensor-presets
+app.get('/api/roboforce/sensor-presets', authMiddleware, (req, res) => {
+  res.json(Object.values(ROBOFORCE_PRESETS));
+});
+
+// POST /api/roboforce/import — import RoboForce data
+app.post('/api/roboforce/import', authMiddleware, requireRole('platform_admin', 'data_admin'), (req, res) => {
+  const { datasetName, episodes, preset } = req.body;
+  if (!datasetName || !episodes || !Array.isArray(episodes)) {
+    return res.status(400).json({ error: 'datasetName and episodes array required' });
+  }
+
+  const datasetId = `ds_roboforce_${Date.now()}`;
+  const dataset = Datasets.insert({
+    id: datasetId,
+    name: datasetName,
+    description: `RoboForce Titan dataset (${preset || 'custom'})`,
+    format: 'roboforce',
+    robotType: 'RoboForce Titan',
+    sensorConfig: ROBOFORCE_PRESETS[preset] || { sensors: [] },
+    episodeCount: episodes.length,
+  });
+
+  // Import episodes
+  for (const ep of episodes) {
+    Episodes.insert({
+      id: ep.id || `ep_rf_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      datasetId,
+      name: ep.name,
+      description: ep.description,
+      frameCount: ep.frameCount || 0,
+      duration: ep.duration || 0,
+      fps: ep.fps || 30,
+      robot: 'RoboForce Titan',
+      sensors: ep.sensors || [],
+    });
+  }
+
+  auditLog.write({ event: 'ROBOFORCE_IMPORT', userId: req.user.userId, action: 'create', resource: `dataset:${datasetId}`, details: { episodes: episodes.length }, result: 'success' });
+  res.json({ success: true, datasetId, episodeCount: episodes.length });
+});
+
+// POST /api/roboforce/validate — validate RoboForce data format
+app.post('/api/roboforce/validate', authMiddleware, (req, res) => {
+  const { data, preset } = req.body;
+  const presetConfig = ROBOFORCE_PRESETS[preset];
+  const errors = [];
+  const warnings = [];
+
+  if (!data) {
+    errors.push('No data provided');
+  } else {
+    if (!data.episodes || !Array.isArray(data.episodes)) errors.push('Missing episodes array');
+    if (!data.metadata) warnings.push('Missing metadata');
+    if (presetConfig && data.sensors) {
+      const expectedSensors = presetConfig.sensors.map(s => s.type);
+      const actualSensors = data.sensors.map(s => s.type);
+      const missing = expectedSensors.filter(s => !actualSensors.includes(s));
+      if (missing.length > 0) warnings.push(`Missing sensor types: ${missing.join(', ')}`);
+    }
+  }
+
+  res.json({
+    valid: errors.length === 0,
+    errors,
+    warnings,
+    preset: presetConfig ? preset : 'custom',
+  });
+});
+
+// POST /api/roboforce/upload — upload video + create order + task
+app.post('/api/roboforce/upload', authMiddleware, upload.single('video'), async (req, res) => {
+  try {
+    const { datasetName, episodeName, description, preset, orderTitle } = req.body;
+    const videoFile = req.file;
+
+    if (!videoFile) {
+      return res.status(400).json({ error: 'No video file uploaded' });
+    }
+    if (!datasetName || !episodeName) {
+      return res.status(400).json({ error: 'datasetName and episodeName required' });
+    }
+
+    // 1. Create dataset
+    const datasetId = `ds_roboforce_${Date.now()}`;
+    Datasets.insert({
+      id: datasetId,
+      name: datasetName,
+      description: `RoboForce upload: ${datasetName}`,
+      format: 'roboforce',
+      robotType: 'RoboForce Titan',
+      sensorConfig: ROBOFORCE_PRESETS[preset] || { sensors: [] },
+      episodeCount: 1,
+    });
+
+    // 2. Create episode with video path
+    const episodeId = `ep_rf_${Date.now()}`;
+    const videoPath = videoFile.path.replace(/\\/g, '/'); // normalize path
+    Episodes.insert({
+      id: episodeId,
+      datasetId,
+      name: episodeName,
+      description: description || '',
+      frameCount: 0,
+      duration: 0,
+      fps: 30,
+      robot: 'RoboForce Titan',
+      sensors: [],
+      h5Path: videoPath, // store video path in h5_path field
+    });
+
+    // 3. Create order
+    const orderId = `order_${Date.now()}`;
+    const now = new Date().toISOString();
+    Orders.insert({
+      id: orderId,
+      title: orderTitle || `RoboForce VQA - ${episodeName}`,
+      description: `Auto-generated order for ${datasetName}`,
+      clientId: req.user.userId,
+      datasetId,
+      taskType: 'vqa',
+      taskCount: 1,
+      status: 'pending',
+      priority: 'normal',
+      deadline: null,
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    // 4. Create task
+    const taskId = `task_${Date.now()}`;
+    Tasks.insert({
+      id: taskId,
+      title: `VQA: ${episodeName}`,
+      description: `Auto-generated VQA task for ${episodeName}`,
+      type: 'vqa',
+      status: 'pending',
+      priority: 'normal',
+      datasetId,
+      episodeIds: JSON.stringify([episodeId]),
+      assignedTo: null,
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    auditLog.write({
+      event: 'ROBOFORCE_UPLOAD',
+      userId: req.user.userId,
+      action: 'create',
+      resource: `order:${orderId}`,
+      details: { datasetId, episodeId, videoPath },
+      result: 'success',
+    });
+
+    res.json({
+      success: true,
+      datasetId,
+      episodeId,
+      orderId,
+      taskId,
+      videoPath,
+    });
+  } catch (err) {
+    console.error('RoboForce upload error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ========== BATCH OPERATIONS API ==========
+
+// In-memory batch jobs
+const batchJobs = {};
+
+// POST /api/batch/import-episodes — bulk import episodes from JSON/CSV
+app.post('/api/batch/import-episodes', authMiddleware, requireRole('platform_admin', 'data_admin'), (req, res) => {
+  const { datasetId, episodes, format } = req.body;
+  if (!datasetId || !episodes || !Array.isArray(episodes)) {
+    return res.status(400).json({ error: 'datasetId and episodes array required' });
+  }
+  const jobId = `batch_import_${Date.now()}`;
+  batchJobs[jobId] = { id: jobId, type: 'import', status: 'processing', progress: 0, total: episodes.length, createdAt: new Date().toISOString() };
+
+  // Process immediately (synchronous for simplicity in MVP)
+  let imported = 0;
+  for (const ep of episodes) {
+    Episodes.insert({
+      id: ep.id || `ep_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      datasetId,
+      name: ep.name || ep.title,
+      description: ep.description,
+      skill: ep.skill,
+      category: ep.category,
+      h5_path: ep.h5_path,
+      frameCount: ep.frameCount || 0,
+      duration: ep.duration || 0,
+      fps: ep.fps || 30,
+      robot: ep.robot,
+      bimanual: ep.bimanual || false,
+      sensors: ep.sensors || [],
+      createdAt: new Date().toISOString(),
+    });
+    imported++;
+  }
+  batchJobs[jobId] = { ...batchJobs[jobId], status: 'completed', progress: 100, imported };
+  res.json(batchJobs[jobId]);
+});
+
+// POST /api/batch/assign-tasks — bulk task assignment
+app.post('/api/batch/assign-tasks', authMiddleware, requireRole('platform_admin', 'reviewer', 'data_admin'), (req, res) => {
+  const { episodeIds, assignees, type, priority, datasetId } = req.body;
+  if (!episodeIds || !Array.isArray(episodeIds) || !assignees || !Array.isArray(assignees)) {
+    return res.status(400).json({ error: 'episodeIds and assignees arrays required' });
+  }
+
+  const jobId = `batch_assign_${Date.now()}`;
+  const tasks = [];
+  const perAssignee = Math.ceil(episodeIds.length / assignees.length);
+
+  for (let i = 0; i < assignees.length; i++) {
+    const start = i * perAssignee;
+    const end = Math.min(start + perAssignee, episodeIds.length);
+    const eps = episodeIds.slice(start, end);
+    if (eps.length === 0) continue;
+    const task = Tasks.insert({
+      title: `Batch ${type || 'annotation'} — ${eps.length} episodes`,
+      description: `Auto-assigned batch task`,
+      type: type || 'annotation',
+      status: 'assigned',
+      priority: priority || 'normal',
+      datasetId: datasetId || null,
+      episodeIds: eps,
+      assignedTo: assignees[i],
+      assignedBy: req.user.userId,
+    });
+    tasks.push(task);
+  }
+
+  batchJobs[jobId] = { id: jobId, type: 'assign', status: 'completed', progress: 100, tasksCreated: tasks.length, createdAt: new Date().toISOString() };
+  res.json({ ...batchJobs[jobId], tasks });
+});
+
+// POST /api/batch/export — bulk export
+app.post('/api/batch/export', authMiddleware, (req, res) => {
+  const { datasetId, format, includeAnnotations, includeReviews } = req.body;
+  const datasets = datasetId ? [Datasets.getById(datasetId)] : Datasets.getAll();
+  const episodes = datasetId ? Episodes.getByDataset(datasetId) : Episodes.getAll();
+  const annotations = includeAnnotations !== false ? Annotations.getAll() : [];
+
+  const result = {
+    exportedAt: new Date().toISOString(),
+    format: format || 'json',
+    datasets: datasets.filter(Boolean).length,
+    episodes: episodes.length,
+    annotations: annotations.length,
+    data: { datasets: datasets.filter(Boolean), episodes, annotations },
+  };
+
+  res.json(result);
+});
+
+// POST /api/batch/auto-annotate — bulk auto-annotation
+app.post('/api/batch/auto-annotate', authMiddleware, requireRole('platform_admin', 'data_admin'), (req, res) => {
+  const { episodeIds, modelId } = req.body;
+  if (!episodeIds || !Array.isArray(episodeIds)) {
+    return res.status(400).json({ error: 'episodeIds array required' });
+  }
+
+  const jobId = `batch_auto_${Date.now()}`;
+  batchJobs[jobId] = { id: jobId, type: 'auto-annotate', status: 'processing', progress: 0, total: episodeIds.length, createdAt: new Date().toISOString() };
+
+  // Simulate async processing
+  setTimeout(() => {
+    const annotations = episodeIds.map(epId => ({
+      id: `ann_auto_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      episodeId: epId,
+      type: 'label',
+      label: 'Auto-annotated',
+      confidence: 0.85 + Math.random() * 0.1,
+      annotator: `VLM-${modelId || 'auto'}`,
+      verified: false,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    }));
+    Annotations.insertMany(annotations);
+    batchJobs[jobId] = { ...batchJobs[jobId], status: 'completed', progress: 100, annotated: annotations.length };
+  }, 2000);
+
+  res.json(batchJobs[jobId]);
+});
+
+// GET /api/batch/jobs/:jobId
+app.get('/api/batch/jobs/:jobId', authMiddleware, (req, res) => {
+  const job = batchJobs[req.params.jobId];
+  if (!job) return res.status(404).json({ error: 'Job not found' });
+  res.json(job);
+});
+
+// ========== ORDER MANAGEMENT API ==========
+
+// GET /api/orders/stats — must be before :id
+app.get('/api/orders/stats', authMiddleware, requireRole('platform_admin', 'data_admin'), (req, res) => {
+  res.json(Orders.getStats());
+});
+
+// POST /api/orders
+app.post('/api/orders', authMiddleware, requireRole('platform_admin', 'data_admin'), (req, res) => {
+  const order = Orders.insert({ ...req.body, createdBy: req.user.userId });
+  auditLog.write({ event: 'ORDER_CREATE', userId: req.user.userId, action: 'create', resource: `order:${order.id}`, result: 'success' });
+  res.status(201).json(order);
+});
+
+// GET /api/orders
+app.get('/api/orders', authMiddleware, requireRole('platform_admin', 'data_admin'), (req, res) => {
+  res.json(Orders.getAll());
+});
+
+// GET /api/orders/:id
+app.get('/api/orders/:id', authMiddleware, requireRole('platform_admin', 'data_admin'), (req, res) => {
+  const order = Orders.getById(req.params.id);
+  if (!order) return res.status(404).json({ error: 'Order not found' });
+  res.json(order);
+});
+
+// PUT /api/orders/:id
+app.put('/api/orders/:id', authMiddleware, requireRole('platform_admin', 'data_admin'), (req, res) => {
+  const order = Orders.update(req.params.id, req.body);
+  if (!order) return res.status(404).json({ error: 'Order not found' });
+  auditLog.write({ event: 'ORDER_UPDATE', userId: req.user.userId, action: 'update', resource: `order:${req.params.id}`, result: 'success' });
+  res.json(order);
+});
+
+// PUT /api/orders/:id/status
+app.put('/api/orders/:id/status', authMiddleware, requireRole('platform_admin', 'data_admin'), (req, res) => {
+  const { status } = req.body;
+  if (!status) return res.status(400).json({ error: 'status required' });
+  const order = Orders.update(req.params.id, { status });
+  if (!order) return res.status(404).json({ error: 'Order not found' });
+  auditLog.write({ event: 'ORDER_STATUS', userId: req.user.userId, action: 'update', resource: `order:${req.params.id}`, details: { status }, result: 'success' });
+  res.json(order);
+});
+
+// DELETE /api/orders/:id
+app.delete('/api/orders/:id', authMiddleware, requireRole('platform_admin'), (req, res) => {
+  const existing = Orders.getById(req.params.id);
+  if (!existing) return res.status(404).json({ error: 'Order not found' });
+  Orders.delete(req.params.id);
+  auditLog.write({ event: 'ORDER_DELETE', userId: req.user.userId, action: 'delete', resource: `order:${req.params.id}`, result: 'success' });
+  res.json({ success: true });
+});
+
+// GET /api/orders/:id/tasks — tasks linked to order
+app.get('/api/orders/:id/tasks', authMiddleware, (req, res) => {
+  const allTasks = Tasks.getAll();
+  const orderTasks = allTasks.filter(t => t.datasetId === req.params.id || t.description?.includes(req.params.id));
+  res.json(orderTasks);
+});
+
+// POST /api/orders/:id/tasks — create task for order
+app.post('/api/orders/:id/tasks', authMiddleware, requireRole('platform_admin', 'data_admin'), (req, res) => {
+  const order = Orders.getById(req.params.id);
+  if (!order) return res.status(404).json({ error: 'Order not found' });
+  const task = Tasks.insert({
+    ...req.body,
+    datasetId: order.datasetId,
+    assignedBy: req.user.userId,
+    description: `${req.body.description || ''} [Order: ${req.params.id}]`.trim(),
+  });
+  res.status(201).json(task);
+});
+
+// ========== QUALITY CONTROL API ==========
+
+// POST /api/reviews — submit review
+app.post('/api/reviews', authMiddleware, requireRole('platform_admin', 'reviewer'), (req, res) => {
+  const review = Reviews.insert({ ...req.body, reviewerId: req.user.userId });
+  auditLog.write({ event: 'REVIEW_CREATE', userId: req.user.userId, action: 'create', resource: `review:${review.id}`, result: 'success' });
+  res.status(201).json(review);
+});
+
+// GET /api/reviews/task/:taskId — task reviews
+app.get('/api/reviews/task/:taskId', authMiddleware, (req, res) => {
+  res.json(Reviews.getByTask(req.params.taskId));
+});
+
+// GET /api/reviews/stats — review statistics
+app.get('/api/reviews/stats', authMiddleware, requireRole('platform_admin', 'reviewer'), (req, res) => {
+  res.json(Reviews.getStats());
+});
+
+// GET /api/quality/annotator/:userId — annotator quality report
+app.get('/api/quality/annotator/:userId', authMiddleware, requireRole('platform_admin', 'reviewer'), (req, res) => {
+  const reviews = Reviews.getByReviewer(req.params.userId);
+  const scores = reviews.filter(r => r.score !== null).map(r => r.score);
+  const avgScore = scores.length > 0 ? Math.round(scores.reduce((a, b) => a + b) / scores.length * 10) / 10 : null;
+  const approved = reviews.filter(r => r.status === 'approved').length;
+  const rejected = reviews.filter(r => r.status === 'rejected').length;
+  res.json({
+    userId: req.params.userId,
+    totalReviews: reviews.length,
+    averageScore: avgScore,
+    approved,
+    rejected,
+    approvalRate: reviews.length > 0 ? Math.round(approved / reviews.length * 100) : 0,
+  });
+});
+
+// GET /api/quality/dashboard — quality dashboard data
+app.get('/api/quality/dashboard', authMiddleware, requireRole('platform_admin', 'reviewer'), (req, res) => {
+  const stats = Reviews.getStats();
+  const allTasks = Tasks.getAll();
+  const completedTasks = allTasks.filter(t => t.status === 'completed').length;
+  res.json({
+    ...stats,
+    completedTasks,
+    qualityScore: stats.averageScore || 0,
+    reviewBacklog: stats.byStatus['pending'] || 0,
+  });
+});
+
 // GenRobot Dataset API
 app.get('/api/datasets/genrobot', (req, res) => {
   try {
@@ -1972,6 +2816,151 @@ app.get('/api/datasets/genrobot/sample/:sampleId', (req, res) => {
     }
     
     res.json(sample);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ========== BILLING & COST TRACKING API ==========
+
+// GET /api/billing/rates — get all billing rates
+app.get('/api/billing/rates', authMiddleware, requireRole('platform_admin', 'data_admin'), (req, res) => {
+  res.json(Billing.getRates());
+});
+
+// PUT /api/billing/rates/:type — update billing rate
+app.put('/api/billing/rates/:type', authMiddleware, requireRole('platform_admin'), (req, res) => {
+  const { rate, description } = req.body;
+  if (rate === undefined) return res.status(400).json({ error: 'rate required' });
+  Billing.updateRate(req.params.type, rate, description);
+  auditLog.write({ event: 'BILLING_RATE_UPDATE', userId: req.user.userId, action: 'update', resource: `rate:${req.params.type}`, details: { rate }, result: 'success' });
+  res.json({ success: true, type: req.params.type, rate });
+});
+
+// POST /api/billing/calculate — calculate cost for task
+app.post('/api/billing/calculate', authMiddleware, (req, res) => {
+  const { type, episodesCount } = req.body;
+  if (!type || !episodesCount) return res.status(400).json({ error: 'type and episodesCount required' });
+  const result = Billing.calculate(type, episodesCount);
+  if (result.error) return res.status(400).json(result);
+  res.json(result);
+});
+
+// POST /api/billing — create billing record
+app.post('/api/billing', authMiddleware, requireRole('platform_admin', 'data_admin'), (req, res) => {
+  const billing = Billing.insert(req.body);
+  auditLog.write({ event: 'BILLING_CREATE', userId: req.user.userId, action: 'create', resource: `billing:${billing.id}`, result: 'success' });
+  res.status(201).json(billing);
+});
+
+// GET /api/billing — all billing records
+app.get('/api/billing', authMiddleware, requireRole('platform_admin', 'data_admin'), (req, res) => {
+  res.json(Billing.getAll());
+});
+
+// GET /api/billing/:id — billing detail
+app.get('/api/billing/:id', authMiddleware, (req, res) => {
+  const billing = Billing.getById(req.params.id);
+  if (!billing) return res.status(404).json({ error: 'Billing record not found' });
+  res.json(billing);
+});
+
+// GET /api/billing/order/:orderId — billing for order
+app.get('/api/billing/order/:orderId', authMiddleware, (req, res) => {
+  res.json(Billing.getByOrder(req.params.orderId));
+});
+
+// PUT /api/billing/:id — update billing record
+app.put('/api/billing/:id', authMiddleware, requireRole('platform_admin', 'data_admin'), (req, res) => {
+  const billing = Billing.update(req.params.id, req.body);
+  if (!billing) return res.status(404).json({ error: 'Billing record not found' });
+  auditLog.write({ event: 'BILLING_UPDATE', userId: req.user.userId, action: 'update', resource: `billing:${req.params.id}`, result: 'success' });
+  res.json(billing);
+});
+
+// DELETE /api/billing/:id — delete billing record
+app.delete('/api/billing/:id', authMiddleware, requireRole('platform_admin'), (req, res) => {
+  const existing = Billing.getById(req.params.id);
+  if (!existing) return res.status(404).json({ error: 'Billing record not found' });
+  Billing.delete(req.params.id);
+  auditLog.write({ event: 'BILLING_DELETE', userId: req.user.userId, action: 'delete', resource: `billing:${req.params.id}`, result: 'success' });
+  res.json({ success: true });
+});
+
+// GET /api/billing/summary — billing summary
+app.get('/api/billing/summary', authMiddleware, requireRole('platform_admin', 'data_admin'), (req, res) => {
+  res.json(Billing.getSummary());
+});
+
+// ========== VIDEO STREAMING API ==========
+
+// GET /api/episodes/:episodeId/video — stream episode video
+app.get('/api/episodes/:episodeId/video', (req, res) => {
+  try {
+    const episode = Episodes.getById(req.params.episodeId);
+    if (!episode) return res.status(404).json({ error: 'Episode not found' });
+    
+    const videoPath = episode.h5_path || episode.videos?.[0];
+    if (!videoPath) return res.status(404).json({ error: 'No video found for this episode' });
+    
+    const fullPath = path.join(BASE_DIR, videoPath);
+    if (!fs.existsSync(fullPath)) {
+      console.warn(`Video not found: ${fullPath}`);
+      return res.status(404).json({ error: 'Video file not found on disk' });
+    }
+    
+    const stat = fs.statSync(fullPath);
+    const fileSize = stat.size;
+    const range = req.headers.range;
+    
+    if (range) {
+      const parts = range.replace(/bytes=/, '').split('-');
+      const start = parseInt(parts[0], 10);
+      const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+      const chunksize = end - start + 1;
+      
+      res.writeHead(206, {
+        'Content-Range': `bytes ${start}-${end}/${fileSize}`,
+        'Accept-Ranges': 'bytes',
+        'Content-Length': chunksize,
+        'Content-Type': 'video/mp4',
+      });
+      fs.createReadStream(fullPath, { start, end }).pipe(res);
+    } else {
+      res.writeHead(200, {
+        'Content-Length': fileSize,
+        'Content-Type': 'video/mp4',
+      });
+      fs.createReadStream(fullPath).pipe(res);
+    }
+  } catch (error) {
+    console.error('Video streaming error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET /api/episodes/:episodeId/frame — extract single frame
+app.get('/api/episodes/:episodeId/frame', (req, res) => {
+  try {
+    const { frameIndex = 0 } = req.query;
+    const episode = Episodes.getById(req.params.episodeId);
+    if (!episode) return res.status(404).json({ error: 'Episode not found' });
+    
+    const videoPath = episode.h5_path || episode.videos?.[0];
+    if (!videoPath) return res.status(404).json({ error: 'No video found' });
+    
+    const fullPath = path.join(BASE_DIR, videoPath);
+    if (!fs.existsSync(fullPath)) return res.status(404).json({ error: 'Video file not found' });
+    
+    // Mock frame extraction — in production use ffmpeg or opencv
+    res.json({
+      episodeId: req.params.episodeId,
+      frameIndex: parseInt(String(frameIndex)),
+      width: 640,
+      height: 480,
+      timestamp: (parseInt(String(frameIndex)) / (episode.fps || 30)).toFixed(2),
+      dataUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
+    });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }

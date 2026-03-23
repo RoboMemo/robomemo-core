@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import List, Dict, Any, Tuple
 import base64
 import io
+import re
 from datetime import timedelta
 
 # Support for multiple VLM backends
@@ -42,6 +43,112 @@ try:
     GEMINI_AVAILABLE = True
 except ImportError:
     GEMINI_AVAILABLE = False
+
+
+def repair_truncated_json(text: str) -> str:
+    """Attempt to repair truncated JSON from local VLM models.
+
+    Handles:
+    1. Extra data after valid JSON (model continued generating)
+    2. Output truncated mid-value (num_predict exhausted)
+    """
+    # Try parsing as-is first
+    try:
+        json.loads(text)
+        return text
+    except json.JSONDecodeError:
+        pass
+
+    # Strategy 1: Extra data — scan for end of first complete JSON object
+    depth = 0
+    in_string = False
+    escape = False
+    for i, ch in enumerate(text):
+        if escape:
+            escape = False
+            continue
+        if ch == '\\' and in_string:
+            escape = True
+            continue
+        if ch == '"' and not escape:
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if ch in ('{', '['):
+            depth += 1
+        elif ch in ('}', ']'):
+            depth -= 1
+            if depth == 0:
+                candidate = text[:i + 1]
+                try:
+                    json.loads(candidate)
+                    return candidate
+                except json.JSONDecodeError:
+                    pass
+
+    # Strategy 2: Truncated — progressively trim from the end until
+    # closing all open brackets produces valid JSON.
+    repaired = text.rstrip()
+    for _ in range(50):
+        # Close any open string
+        in_str = False
+        esc = False
+        for ch in repaired:
+            if esc:
+                esc = False
+                continue
+            if ch == '\\' and in_str:
+                esc = True
+                continue
+            if ch == '"':
+                in_str = not in_str
+        attempt = repaired + ('"' if in_str else '')
+
+        # Strip trailing comma
+        attempt = attempt.rstrip().rstrip(',')
+
+        # Count unclosed brackets and close them
+        opens = 0
+        open_sq = 0
+        in_s = False
+        es = False
+        for ch in attempt:
+            if es:
+                es = False
+                continue
+            if ch == '\\' and in_s:
+                es = True
+                continue
+            if ch == '"':
+                in_s = not in_s
+                continue
+            if in_s:
+                continue
+            if ch == '{':
+                opens += 1
+            elif ch == '}':
+                opens -= 1
+            elif ch == '[':
+                open_sq += 1
+            elif ch == ']':
+                open_sq -= 1
+
+        attempt += ']' * open_sq + '}' * opens
+
+        try:
+            json.loads(attempt)
+            return attempt
+        except json.JSONDecodeError:
+            pass
+
+        # Trim: remove last non-whitespace character and retry
+        repaired = repaired.rstrip()
+        if len(repaired) <= 1:
+            break
+        repaired = repaired[:-1]
+
+    return text
 
 
 class VideoFrameExtractor:
@@ -110,206 +217,52 @@ class VideoFrameExtractor:
 class VLMAnalyzer:
     """Base class for VLM-based video analysis"""
     
-    # ── Grounding helper doc injected into every prompt ──────────────────────
+    # ── Grounding schema doc (shared across all prompts) ──────────────────────
     _GROUNDING_SCHEMA = """
-GROUNDING SCHEMA — required in every annotated item:
-Every claim must include a "grounding" object with:
-  - frame_indices: list of integer frame indices (from the sequence you were shown) that visually support this claim
-  - timestamps: matching human-readable timestamps e.g. ["0:02", "0:03.5"]
-  - bboxes: list of {"x": 0-1, "y": 0-1, "width": 0-1, "height": 0-1, "label": "string"} in normalised [0,1] coords (x/y = top-left corner). Include bounding boxes for every relevant object region. If unsure, omit or use approximate values.
-  - description: one sentence describing what the visual evidence shows
-  - confidence: float 0.0–1.0 reflecting how certain you are based on the visual evidence
-
-Example grounding object:
-{
-  "frame_indices": [24, 36, 48],
-  "timestamps": ["0:02", "0:03", "0:04"],
-  "bboxes": [{"x": 0.30, "y": 0.40, "width": 0.15, "height": 0.20, "label": "gripper"}],
-  "description": "Frames 24-48: gripper jaws visibly closing around cup edge",
-  "confidence": 0.91
-}
+Every annotated item MUST include a "grounding" object:
+  - frame_indices: list[int] — frame indices from your input that support this claim
+  - timestamps: list[str] — matching timestamps e.g. ["0:02", "0:03.5"]
+  - bboxes: list of {{"x": 0-1, "y": 0-1, "width": 0-1, "height": 0-1, "label": "str"}} normalised coords. Omit if unsure.
+  - description: one sentence of what the visual evidence shows
+  - confidence: float 0.0-1.0
 """
 
-    VQA_PROMPT_TEMPLATE = """
-You are an expert robot manipulation video analyst. Decompose the video into 7 structured VQA categories.
-EVERY annotated item MUST include a "grounding" field anchoring the claim to specific frames and bounding-box regions.
+    VQA_PROMPT_TEMPLATE = """You are analyzing a robot manipulation video. Describe ONLY what you actually see in the provided frames.
 
-VIDEO CONTEXT:
-- Total frames: {total_frames}
-- Duration: {duration:.2f} seconds  
-- FPS: {fps:.2f}
-- Frames are labelled with [Frame N/M @ timestamp] markers in the sequence you received.
+VIDEO: {total_frames} total frames, {duration:.1f}s duration, {fps:.1f} FPS.
 
 """ + _GROUNDING_SCHEMA.strip() + """
 
-CATEGORIES TO ANALYSE:
+Produce a JSON object with these 7 keys. Fill every field from YOUR OWN observations of the frames — do NOT invent or copy example data.
 
-1. TEMPORAL — chronological action sequence, what happens before/after what
-2. SPATIAL — spatial relationships (left/right/above/below/near) between gripper, manipulated objects, and workspace
-3. ATTRIBUTE — object properties: color, material, shape, size, state changes
-4. MECHANICS — contact type, force level (light/medium/strong), contact points, force profile over time
-5. REASONING — why each action is performed this way; strategy and constraints
-6. SUMMARY — high-level task description, start state, end state, milestones, success/failure
-7. TRAJECTORY — end-effector motion: path type (linear/curved/rotational), velocity (slow/medium/fast), waypoints
+1. "temporal" — {{"action_sequence": [list of actions you observe], "relationships": [list of "A BEFORE B" strings]}}
+   Each action: {{"action": str, "timestamp": str, "frame_range": [int,int], "description": str, "grounding": {{...}}}}
 
-OUTPUT FORMAT — return ONLY valid JSON (no markdown):
-{{
-  "temporal": {{
-    "action_sequence": [
-      {{
-        "action": "Approach cup",
-        "timestamp": "0:02",
-        "frame_range": [12, 36],
-        "description": "End-effector moves toward cup from upper right",
-        "grounding": {{
-          "frame_indices": [12, 24, 36],
-          "timestamps": ["0:02", "0:03", "0:04"],
-          "bboxes": [{{"x": 0.55, "y": 0.30, "width": 0.12, "height": 0.18, "label": "end-effector"}}],
-          "description": "Frames 12-36 show arm approaching left side of frame where cup sits",
-          "confidence": 0.93
-        }}
-      }}
-    ],
-    "relationships": ["Approach BEFORE Pre-grasp", "Pre-grasp BEFORE Grasp"]
-  }},
-  "spatial": {{
-    "key_relationships": [
-      {{
-        "timestamp": "0:03",
-        "relationship": "Gripper is directly above cup",
-        "details": "End-effector centroid is within 2 cm of cup opening center",
-        "grounding": {{
-          "frame_indices": [36, 42],
-          "timestamps": ["0:04", "0:04.5"],
-          "bboxes": [
-            {{"x": 0.38, "y": 0.28, "width": 0.10, "height": 0.08, "label": "gripper"}},
-            {{"x": 0.40, "y": 0.46, "width": 0.08, "height": 0.12, "label": "cup"}}
-          ],
-          "description": "Overhead view shows gripper aligned with cup top opening",
-          "confidence": 0.90
-        }}
-      }}
-    ],
-    "trajectory_spatial": "Arm operates in 40x30 cm workspace. Cup transported left-to-right."
-  }},
-  "attribute": {{
-    "objects": [
-      {{
-        "name": "Red plastic cup",
-        "properties": {{"color": "red", "material": "plastic", "shape": "cylindrical", "size": "~9cm tall"}},
-        "state_changes": ["Stationary → Grasped at t=0:03", "Grasped → Placed at t=0:07"],
-        "grounding": {{
-          "frame_indices": [0, 60, 180],
-          "timestamps": ["0:00", "0:03", "0:07"],
-          "bboxes": [{{"x": 0.30, "y": 0.46, "width": 0.09, "height": 0.14, "label": "cup"}}],
-          "description": "Cup visible throughout. Color and shape consistent. Deformation at contact visible in frames 60-80.",
-          "confidence": 0.96
-        }}
-      }}
-    ]
-  }},
-  "mechanics": {{
-    "contacts": [
-      {{
-        "timestamp": "0:03",
-        "contact_type": "Parallel-jaw pinch grip",
-        "force_level": "medium",
-        "contact_points": "Both fingers contact cup outer wall at mid-height",
-        "area": "Two ~2x1 cm patches on opposite sides",
-        "grounding": {{
-          "frame_indices": [60, 72, 84],
-          "timestamps": ["0:03", "0:03.5", "0:04"],
-          "bboxes": [
-            {{"x": 0.36, "y": 0.44, "width": 0.05, "height": 0.08, "label": "contact-left"}},
-            {{"x": 0.52, "y": 0.44, "width": 0.05, "height": 0.08, "label": "contact-right"}}
-          ],
-          "description": "Frames 60-84: slight cup wall deformation visible at gripper finger contact",
-          "confidence": 0.88
-        }}
-      }}
-    ],
-    "force_profile": "0N at approach, increases to ~5N at grasp, maintained through transport, 0N at release"
-  }},
-  "reasoning": {{
-    "action_justifications": [
-      {{
-        "action": "Approach from above at 45 degrees",
-        "reason": "Top-down approach avoids arm self-occlusion and keeps camera view clear",
-        "constraints": ["No collision with table edge", "Camera line-of-sight to cup"],
-        "grounding": {{
-          "frame_indices": [0, 24],
-          "timestamps": ["0:00", "0:02"],
-          "bboxes": [],
-          "description": "Arm trajectory visible approaching from upper-right diagonal",
-          "confidence": 0.85
-        }}
-      }}
-    ],
-    "overall_strategy": "Conservative pick-and-place: minimise spill risk with slow speed and sufficient lift height"
-  }},
-  "summary": {{
-    "task_description": "Pick up red cup from left zone and place in right target zone",
-    "start_state": "Cup upright on left table zone. Gripper at rest.",
-    "end_state": "Cup in target zone. Gripper open and returned.",
-    "success": true,
-    "key_milestones": ["Grasp at 0:03", "Lift at 0:04", "Place at 0:07"],
-    "duration": "{duration:.1f} seconds",
-    "grounding_start": {{
-      "frame_indices": [0, 6],
-      "timestamps": ["0:00", "0:00.2"],
-      "bboxes": [{{"x": 0.28, "y": 0.46, "width": 0.09, "height": 0.14, "label": "cup-start"}}],
-      "description": "Frame 0: initial state with cup on left, gripper at rest upper right",
-      "confidence": 0.98
-    }},
-    "grounding_end": {{
-      "frame_indices": [175, 180],
-      "timestamps": ["0:07.8", "0:08"],
-      "bboxes": [{{"x": 0.65, "y": 0.46, "width": 0.09, "height": 0.14, "label": "cup-end"}}],
-      "description": "Final frames: cup stable in target zone, gripper open",
-      "confidence": 0.97
-    }}
-  }},
-  "trajectory": {{
-    "motion_segments": [
-      {{
-        "segment": "Approach arc",
-        "time_range": "0:00-0:02",
-        "motion_type": "curved",
-        "velocity": "medium",
-        "waypoints": ["Rest position", "Mid-arc above workspace", "Above cup"],
-        "grounding": {{
-          "frame_indices": [0, 18, 36],
-          "timestamps": ["0:00", "0:01", "0:02"],
-          "bboxes": [{{"x": 0.40, "y": 0.20, "width": 0.35, "height": 0.30, "label": "approach-arc"}}],
-          "description": "Curved arm path from top-right to center-left visible across frames 0-36",
-          "confidence": 0.91
-        }}
-      }}
-    ],
-    "overall_path": "J-shaped: arc approach → vertical descent → vertical lift → horizontal traverse → vertical descent to place"
-  }},
-  "visual_evidence": {{
-    "key_frames": [
-      {{"frame_idx": 0,  "timestamp": "0:00", "significance": "Initial state"}},
-      {{"frame_idx": 36, "timestamp": "0:02", "significance": "Gripper aligned above cup"}},
-      {{"frame_idx": 60, "timestamp": "0:03", "significance": "Grasp established"}},
-      {{"frame_idx": 84, "timestamp": "0:04", "significance": "Cup lifted clear of table"}}
-    ]
-  }},
-  "confidence_scores": {{
-    "temporal":   0.0,
-    "spatial":    0.0,
-    "attribute":  0.0,
-    "mechanics":  0.0,
-    "reasoning":  0.0,
-    "summary":    0.0,
-    "trajectory": 0.0
-  }}
-}}
+2. "spatial" — {{"key_relationships": [observed spatial relations], "trajectory_spatial": str}}
+   Each relationship: {{"timestamp": str, "relationship": str, "details": str, "grounding": {{...}}}}
 
-Replace all example values with your actual observations from the video frames provided.
-Confidence scores should be your genuine assessment (0.0–1.0) for each category.
-Return ONLY the JSON object. No markdown. No explanation outside the JSON.
+3. "attribute" — {{"objects": [objects you see]}}
+   Each object: {{"name": str, "properties": {{"color":str,"material":str,"shape":str,"size":str}}, "state_changes": [str], "grounding": {{...}}}}
+
+4. "mechanics" — {{"contacts": [contact events], "force_profile": str}}
+   Each contact: {{"timestamp": str, "contact_type": str, "force_level": "light"|"medium"|"strong", "contact_points": str, "area": str, "grounding": {{...}}}}
+
+5. "reasoning" — {{"action_justifications": [why each action], "overall_strategy": str}}
+   Each justification: {{"action": str, "reason": str, "constraints": [str], "grounding": {{...}}}}
+
+6. "summary" — {{"task_description": str, "start_state": str, "end_state": str, "success": bool, "key_milestones": [str], "duration": str, "grounding_start": {{...}}, "grounding_end": {{...}}}}
+
+7. "trajectory" — {{"motion_segments": [segments], "overall_path": str}}
+   Each segment: {{"segment": str, "time_range": str, "motion_type": "linear"|"curved"|"rotational", "velocity": "slow"|"medium"|"fast", "waypoints": [str], "grounding": {{...}}}}
+
+Also include:
+"visual_evidence": {{"key_frames": [{{"frame_idx": int, "timestamp": str, "significance": str}}]}}
+"confidence_scores": {{"temporal": float, "spatial": float, "attribute": float, "mechanics": float, "reasoning": float, "summary": float, "trajectory": float}}
+
+CRITICAL RULES:
+- Describe ONLY what you see in the frames. Do NOT copy or repeat these instructions as values.
+- Do NOT use underscores with backslashes. Use plain key names like action_sequence, not action\\_sequence.
+- Return ONLY valid JSON. No markdown fences. No extra text.
 """
 
     def __init__(self, api_key: str, model_name: str = "auto"):
@@ -342,12 +295,12 @@ class GeminiAnalyzer(VLMAnalyzer):
 
     def analyze_video(self, video_path: str, num_frames: int = 32) -> Dict[str, Any]:
         """Analyze video using Gemini 2.5 Pro"""
-        print(f"Extracting {num_frames} frames from video...")
+        print(f"Extracting {num_frames} frames from video...", file=sys.stderr)
         frames_data, video_info = VideoFrameExtractor.extract_frames_with_timestamps(
             video_path, num_frames
         )
 
-        print(f"Analyzing with {self.MODEL} ({len(frames_data)} frames)...")
+        print(f"Analyzing with {self.MODEL} ({len(frames_data)} frames)...", file=sys.stderr)
 
         prompt = self.VQA_PROMPT_TEMPLATE.format(
             total_frames=video_info['total_frames'],
@@ -426,12 +379,12 @@ class ClaudeAnalyzer(VLMAnalyzer):
     
     def analyze_video(self, video_path: str, num_frames: int = 32) -> Dict[str, Any]:
         """Analyze video using Claude"""
-        print(f"Extracting {num_frames} frames from video...")
+        print(f"Extracting {num_frames} frames from video...", file=sys.stderr)
         frames_data, video_info = VideoFrameExtractor.extract_frames_with_timestamps(
             video_path, num_frames
         )
         
-        print(f"Analyzing with Claude ({len(frames_data)} frames)...")
+        print(f"Analyzing with Claude ({len(frames_data)} frames)...", file=sys.stderr)
         
         # Prepare prompt
         prompt = self.VQA_PROMPT_TEMPLATE.format(
@@ -516,12 +469,12 @@ class GPT4VisionAnalyzer(VLMAnalyzer):
     
     def analyze_video(self, video_path: str, num_frames: int = 32) -> Dict[str, Any]:
         """Analyze video using GPT-4 Vision"""
-        print(f"Extracting {num_frames} frames from video...")
+        print(f"Extracting {num_frames} frames from video...", file=sys.stderr)
         frames_data, video_info = VideoFrameExtractor.extract_frames_with_timestamps(
             video_path, num_frames
         )
         
-        print(f"Analyzing with {self.model_name} ({len(frames_data)} frames)...")
+        print(f"Analyzing with {self.model_name} ({len(frames_data)} frames)...", file=sys.stderr)
         
         # Prepare prompt
         prompt = self.VQA_PROMPT_TEMPLATE.format(
@@ -619,14 +572,14 @@ class OllamaAnalyzer(VLMAnalyzer):
         """使用 Ollama 本地视觉模型分析视频"""
         import requests as _req
 
-        # 本地模型建议 8–16 帧，避免超时与上下文溢出
-        num_frames = min(num_frames, 16)
+        # 本地模型建议 4–8 帧，避免超时与上下文溢出
+        num_frames = min(num_frames, 8)
 
-        print(f"提取 {num_frames} 帧...")
+        print(f"提取 {num_frames} 帧...", file=sys.stderr)
         frames_data, video_info = VideoFrameExtractor.extract_frames_with_timestamps(
             video_path, num_frames
         )
-        print(f"使用 Ollama/{self.model} 分析 ({len(frames_data)} 帧)...")
+        print(f"使用 Ollama/{self.model} 分析 ({len(frames_data)} 帧)...", file=sys.stderr)
 
         prompt = self.VQA_PROMPT_TEMPLATE.format(
             total_frames=video_info['total_frames'],
@@ -653,8 +606,8 @@ class OllamaAnalyzer(VLMAnalyzer):
             "stream": False,
             "options": {
                 "temperature": 0.2,
-                "num_predict": 4096,
-                "num_ctx": 8192,
+                "num_predict": 8192,
+                "num_ctx": 32768,
             },
         }
 
@@ -666,6 +619,9 @@ class OllamaAnalyzer(VLMAnalyzer):
             )
             resp.raise_for_status()
             result_text = resp.json()["message"]["content"]
+
+            # Strip markdown escape artifacts (\_  →  _)
+            result_text = result_text.replace("\\_", "_")
 
             # 去掉 Markdown 代码块
             if "```json" in result_text:
@@ -679,7 +635,28 @@ class OllamaAnalyzer(VLMAnalyzer):
             if start >= 0 and end > start:
                 result_text = result_text[start:end]
 
-            analysis = json.loads(result_text.strip())
+            # Attempt to repair truncated or extra-data JSON
+            result_text = repair_truncated_json(result_text.strip())
+
+            analysis = json.loads(result_text)
+
+            # Fill in missing categories (truncated output may be partial)
+            defaults = {
+                'temporal': {'action_sequence': [], 'relationships': []},
+                'spatial': {'key_relationships': [], 'trajectory_spatial': ''},
+                'attribute': {'objects': []},
+                'mechanics': {'contacts': [], 'force_profile': ''},
+                'reasoning': {'action_justifications': [], 'overall_strategy': ''},
+                'summary': {'task_description': '', 'start_state': '', 'end_state': '',
+                            'success': False, 'key_milestones': [], 'duration': ''},
+                'trajectory': {'motion_segments': [], 'overall_path': ''},
+                'visual_evidence': {'key_frames': []},
+                'confidence_scores': {k: 0.0 for k in
+                    ['temporal', 'spatial', 'attribute', 'mechanics', 'reasoning', 'summary', 'trajectory']},
+            }
+            for key, default_val in defaults.items():
+                if key not in analysis:
+                    analysis[key] = default_val
             analysis['metadata'] = {
                 'video_path': video_path,
                 'video_info': video_info,

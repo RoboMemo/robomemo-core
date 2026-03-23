@@ -3,10 +3,13 @@ import type {
   Simulator, SensorConfig, AugmentationModel, ExportFormat,
   PlatformStats, TimelineEntry,
   StructuredVQAAnalysis, VQAAnnotationRecord, VLMProvider,
-  TemporalConsistencyCheck
+  TemporalConsistencyCheck,
+  Task, TaskStats,
+  Review, ReviewStats, QualityDashboard, AnnotatorQuality,
+  Order, OrderStats
 } from '@/types';
 
-const API_BASE = 'http://localhost:3001/api';
+const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:3001/api';
 
 class ApiService {
   private token: string | null = null;
@@ -27,7 +30,7 @@ class ApiService {
     return this.token;
   }
 
-  private async fetch<T>(endpoint: string, options?: RequestInit): Promise<T> {
+  async fetch<T>(endpoint: string, options?: RequestInit): Promise<T> {
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
     };
@@ -96,6 +99,195 @@ class ApiService {
 
   async deleteUser(id: string): Promise<void> {
     return this.fetch(`/users/${id}`, { method: 'DELETE' });
+  }
+
+  // ========== Task Management ==========
+
+  async getTasks(status?: string): Promise<Task[]> {
+    if (status) return this.fetch(`/tasks?status=${status}`);
+    return this.fetch('/tasks');
+  }
+
+  async getMyTasks(): Promise<Task[]> {
+    return this.fetch('/tasks/my');
+  }
+
+  async getTask(id: string): Promise<Task> {
+    return this.fetch(`/tasks/${id}`);
+  }
+
+  async createTask(task: Partial<Task>): Promise<Task> {
+    return this.fetch('/tasks', {
+      method: 'POST',
+      body: JSON.stringify(task),
+    });
+  }
+
+  async updateTask(id: string, updates: Partial<Task>): Promise<Task> {
+    return this.fetch(`/tasks/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(updates),
+    });
+  }
+
+  async updateTaskStatus(id: string, status: string): Promise<Task> {
+    return this.fetch(`/tasks/${id}/status`, {
+      method: 'PUT',
+      body: JSON.stringify({ status }),
+    });
+  }
+
+  async deleteTask(id: string): Promise<void> {
+    return this.fetch(`/tasks/${id}`, { method: 'DELETE' });
+  }
+
+  async getTaskStats(): Promise<TaskStats> {
+    return this.fetch('/tasks/stats');
+  }
+
+  // ========== Reviews & Quality Control ==========
+
+  async createReview(review: Partial<Review>): Promise<Review> {
+    return this.fetch('/reviews', {
+      method: 'POST',
+      body: JSON.stringify(review),
+    });
+  }
+
+  async getTaskReviews(taskId: string): Promise<Review[]> {
+    return this.fetch(`/reviews/task/${taskId}`);
+  }
+
+  async getReviewStats(): Promise<ReviewStats> {
+    return this.fetch('/reviews/stats');
+  }
+
+  async getAnnotatorQuality(userId: string): Promise<AnnotatorQuality> {
+    return this.fetch(`/quality/annotator/${userId}`);
+  }
+
+  async getQualityDashboard(): Promise<QualityDashboard> {
+    return this.fetch('/quality/dashboard');
+  }
+
+  // ========== Order Management ==========
+
+  async getOrders(): Promise<Order[]> {
+    return this.fetch('/orders');
+  }
+
+  async getOrder(id: string): Promise<Order> {
+    return this.fetch(`/orders/${id}`);
+  }
+
+  async createOrder(order: Partial<Order>): Promise<Order> {
+    return this.fetch('/orders', {
+      method: 'POST',
+      body: JSON.stringify(order),
+    });
+  }
+
+  async updateOrder(id: string, updates: Partial<Order>): Promise<Order> {
+    return this.fetch(`/orders/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(updates),
+    });
+  }
+
+  async updateOrderStatus(id: string, status: string): Promise<Order> {
+    return this.fetch(`/orders/${id}/status`, {
+      method: 'PUT',
+      body: JSON.stringify({ status }),
+    });
+  }
+
+  async deleteOrder(id: string): Promise<void> {
+    return this.fetch(`/orders/${id}`, { method: 'DELETE' });
+  }
+
+  async getOrderTasks(orderId: string): Promise<Task[]> {
+    return this.fetch(`/orders/${orderId}/tasks`);
+  }
+
+  async createOrderTask(orderId: string, task: Partial<Task>): Promise<Task> {
+    return this.fetch(`/orders/${orderId}/tasks`, {
+      method: 'POST',
+      body: JSON.stringify(task),
+    });
+  }
+
+  async getOrderStats(): Promise<OrderStats> {
+    return this.fetch('/orders/stats');
+  }
+
+  // ========== Batch Operations ==========
+
+  async batchImportEpisodes(datasetId: string, episodes: any[]): Promise<any> {
+    return this.fetch('/batch/import-episodes', {
+      method: 'POST',
+      body: JSON.stringify({ datasetId, episodes }),
+    });
+  }
+
+  async batchAssignTasks(params: { episodeIds: string[]; assignees: string[]; type?: string; priority?: string; datasetId?: string }): Promise<any> {
+    return this.fetch('/batch/assign-tasks', {
+      method: 'POST',
+      body: JSON.stringify(params),
+    });
+  }
+
+  async batchExport(params: { datasetId?: string; format?: string; includeAnnotations?: boolean }): Promise<any> {
+    return this.fetch('/batch/export', {
+      method: 'POST',
+      body: JSON.stringify(params),
+    });
+  }
+
+  async batchAutoAnnotate(episodeIds: string[], modelId?: string): Promise<any> {
+    return this.fetch('/batch/auto-annotate', {
+      method: 'POST',
+      body: JSON.stringify({ episodeIds, modelId }),
+    });
+  }
+
+  async getBatchJobStatus(jobId: string): Promise<any> {
+    return this.fetch(`/batch/jobs/${jobId}`);
+  }
+
+  // ========== RoboForce Integration ==========
+
+  async getRoboForceSensorPresets(): Promise<any[]> {
+    return this.fetch('/roboforce/sensor-presets');
+  }
+
+  async importRoboForceData(params: { datasetName: string; episodes: any[]; preset?: string }): Promise<any> {
+    return this.fetch('/roboforce/import', {
+      method: 'POST',
+      body: JSON.stringify(params),
+    });
+  }
+
+  async validateRoboForceData(params: { data: any; preset?: string }): Promise<any> {
+    return this.fetch('/roboforce/validate', {
+      method: 'POST',
+      body: JSON.stringify(params),
+    });
+  }
+
+  async uploadRoboForceVideo(formData: FormData): Promise<any> {
+    const token = this.getToken();
+    const response = await fetch(`${this.baseUrl}/api/roboforce/upload`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+      },
+      body: formData, // FormData handles Content-Type automatically
+    });
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Upload failed');
+    }
+    return response.json();
   }
 
   // ========== GDPR Compliance ==========
@@ -349,7 +541,7 @@ class ApiService {
 
   // Auto-Annotation (VLM-based)
   async getAutoAnnotationModels(): Promise<any[]> {
-    return this.fetch('/autoannotation/models');
+    return this.fetch('/vlm/models');
   }
 
   async segmentVideo(videoPath: string, modelId: string, options?: any): Promise<any> {
@@ -377,13 +569,6 @@ class ApiService {
     return this.fetch('/vlm/local/query', {
       method: 'POST',
       body: JSON.stringify({ videoPath, query }),
-    });
-  }
-
-  async batchAutoAnnotate(episodeIds: string[], modelId: string, annotationType: string, options?: any): Promise<any> {
-    return this.fetch('/autoannotation/batch', {
-      method: 'POST',
-      body: JSON.stringify({ episodeIds, modelId, annotationType, options }),
     });
   }
 

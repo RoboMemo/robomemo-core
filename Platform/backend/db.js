@@ -572,7 +572,430 @@ function getTimeline(days = 30) {
   };
 }
 
+// ─── Tasks ────────────────────────────────────────────────────────────────────
+db.exec(`
+  CREATE TABLE IF NOT EXISTS tasks (
+    id            TEXT PRIMARY KEY,
+    title         TEXT NOT NULL,
+    description   TEXT,
+    type          TEXT NOT NULL DEFAULT 'annotation',
+    status        TEXT NOT NULL DEFAULT 'pending',
+    priority      TEXT DEFAULT 'normal',
+    dataset_id    TEXT,
+    episode_ids   TEXT,
+    assigned_to   TEXT,
+    assigned_by   TEXT,
+    reviewer_id   TEXT,
+    due_date      TEXT,
+    started_at    TEXT,
+    completed_at  TEXT,
+    result        TEXT,
+    created_at    TEXT,
+    updated_at    TEXT
+  );
+  CREATE INDEX IF NOT EXISTS idx_task_assigned ON tasks(assigned_to);
+  CREATE INDEX IF NOT EXISTS idx_task_status   ON tasks(status);
+  CREATE INDEX IF NOT EXISTS idx_task_dataset  ON tasks(dataset_id);
+`);
+
+const TASK_JSON_COLS = new Set(['episode_ids', 'result']);
+const TASK_RENAME = {
+  dataset_id:   'datasetId',
+  episode_ids:  'episodeIds',
+  assigned_to:  'assignedTo',
+  assigned_by:  'assignedBy',
+  reviewer_id:  'reviewerId',
+  due_date:     'dueDate',
+  started_at:   'startedAt',
+  completed_at: 'completedAt',
+  created_at:   'createdAt',
+  updated_at:   'updatedAt',
+};
+
+function parseTaskRow(row) {
+  if (!row) return null;
+  const out = {};
+  for (const [k, v] of Object.entries(row)) {
+    const key = TASK_RENAME[k] ?? k;
+    if (TASK_JSON_COLS.has(k) && typeof v === 'string') {
+      try { out[key] = JSON.parse(v); } catch { out[key] = v; }
+    } else {
+      out[key] = v;
+    }
+  }
+  return out;
+}
+
+const Tasks = {
+  getAll: () =>
+    db.prepare('SELECT * FROM tasks ORDER BY created_at DESC').all().map(parseTaskRow),
+
+  getById: (id) =>
+    parseTaskRow(db.prepare('SELECT * FROM tasks WHERE id = ?').get(id)),
+
+  getByUser: (userId) =>
+    db.prepare('SELECT * FROM tasks WHERE assigned_to = ? ORDER BY created_at DESC')
+      .all(userId).map(parseTaskRow),
+
+  getByStatus: (status) =>
+    db.prepare('SELECT * FROM tasks WHERE status = ? ORDER BY created_at DESC')
+      .all(status).map(parseTaskRow),
+
+  insert: (t) => {
+    const id = t.id || `task_${Date.now()}_${require('crypto').randomBytes(3).toString('hex')}`;
+    const now = new Date().toISOString();
+    db.prepare(`
+      INSERT OR REPLACE INTO tasks
+        (id, title, description, type, status, priority, dataset_id,
+         episode_ids, assigned_to, assigned_by, reviewer_id,
+         due_date, started_at, completed_at, result, created_at, updated_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    `).run(
+      id,
+      t.title,
+      t.description || null,
+      t.type || 'annotation',
+      t.status || 'pending',
+      t.priority || 'normal',
+      t.datasetId || null,
+      JSON.stringify(t.episodeIds || []),
+      t.assignedTo || null,
+      t.assignedBy || null,
+      t.reviewerId || null,
+      t.dueDate || null,
+      t.startedAt || null,
+      t.completedAt || null,
+      t.result ? JSON.stringify(t.result) : null,
+      t.createdAt || now,
+      now
+    );
+    return Tasks.getById(id);
+  },
+
+  update: (id, updates) => {
+    const existing = Tasks.getById(id);
+    if (!existing) return null;
+    const merged = { ...existing, ...updates, updatedAt: new Date().toISOString() };
+    return Tasks.insert({ ...merged, id });
+  },
+
+  delete: (id) => {
+    db.prepare('DELETE FROM tasks WHERE id = ?').run(id);
+  },
+};
+
+// ─── Reviews ──────────────────────────────────────────────────────────────────
+db.exec(`
+  CREATE TABLE IF NOT EXISTS reviews (
+    id            TEXT PRIMARY KEY,
+    task_id       TEXT,
+    annotation_id TEXT,
+    reviewer_id   TEXT NOT NULL,
+    status        TEXT NOT NULL DEFAULT 'pending',
+    score         INTEGER,
+    feedback      TEXT,
+    created_at    TEXT
+  );
+  CREATE INDEX IF NOT EXISTS idx_review_task     ON reviews(task_id);
+  CREATE INDEX IF NOT EXISTS idx_review_reviewer ON reviews(reviewer_id);
+  CREATE INDEX IF NOT EXISTS idx_review_status   ON reviews(status);
+`);
+
+const REVIEW_RENAME = {
+  task_id:       'taskId',
+  annotation_id: 'annotationId',
+  reviewer_id:   'reviewerId',
+  created_at:    'createdAt',
+};
+
+function parseReviewRow(row) {
+  if (!row) return null;
+  const out = {};
+  for (const [k, v] of Object.entries(row)) {
+    out[REVIEW_RENAME[k] ?? k] = v;
+  }
+  return out;
+}
+
+const Reviews = {
+  getAll: () =>
+    db.prepare('SELECT * FROM reviews ORDER BY created_at DESC').all().map(parseReviewRow),
+
+  getById: (id) =>
+    parseReviewRow(db.prepare('SELECT * FROM reviews WHERE id = ?').get(id)),
+
+  getByTask: (taskId) =>
+    db.prepare('SELECT * FROM reviews WHERE task_id = ? ORDER BY created_at DESC')
+      .all(taskId).map(parseReviewRow),
+
+  getByReviewer: (reviewerId) =>
+    db.prepare('SELECT * FROM reviews WHERE reviewer_id = ? ORDER BY created_at DESC')
+      .all(reviewerId).map(parseReviewRow),
+
+  insert: (r) => {
+    const id = r.id || `rev_${Date.now()}_${require('crypto').randomBytes(3).toString('hex')}`;
+    const now = new Date().toISOString();
+    db.prepare(`
+      INSERT INTO reviews (id, task_id, annotation_id, reviewer_id, status, score, feedback, created_at)
+      VALUES (?,?,?,?,?,?,?,?)
+    `).run(id, r.taskId || null, r.annotationId || null, r.reviewerId,
+      r.status || 'pending', r.score ?? null, r.feedback || null, r.createdAt || now);
+    return Reviews.getById(id);
+  },
+
+  getStats: () => {
+    const total = db.prepare('SELECT COUNT(*) as n FROM reviews').get().n;
+    const byStatus = db.prepare('SELECT status, COUNT(*) as count FROM reviews GROUP BY status').all();
+    const avgScore = db.prepare('SELECT AVG(score) as avg FROM reviews WHERE score IS NOT NULL').get().avg;
+    const byReviewer = db.prepare(`
+      SELECT reviewer_id, COUNT(*) as count, AVG(score) as avgScore
+      FROM reviews GROUP BY reviewer_id
+    `).all();
+    return {
+      total,
+      byStatus: Object.fromEntries(byStatus.map(r => [r.status, r.count])),
+      averageScore: avgScore ? Math.round(avgScore * 10) / 10 : null,
+      byReviewer: byReviewer.map(r => ({
+        reviewerId: r.reviewer_id,
+        count: r.count,
+        averageScore: r.avgScore ? Math.round(r.avgScore * 10) / 10 : null,
+      })),
+    };
+  },
+};
+
+// ─── Orders ───────────────────────────────────────────────────────────────────
+db.exec(`
+  CREATE TABLE IF NOT EXISTS orders (
+    id                TEXT PRIMARY KEY,
+    title             TEXT NOT NULL,
+    description       TEXT,
+    client_name       TEXT,
+    client_contact    TEXT,
+    status            TEXT NOT NULL DEFAULT 'draft',
+    priority          TEXT DEFAULT 'normal',
+    dataset_id        TEXT,
+    total_episodes    INTEGER DEFAULT 0,
+    completed_episodes INTEGER DEFAULT 0,
+    due_date          TEXT,
+    budget            REAL,
+    actual_cost       REAL DEFAULT 0,
+    created_by        TEXT,
+    created_at        TEXT,
+    updated_at        TEXT
+  );
+  CREATE INDEX IF NOT EXISTS idx_order_status ON orders(status);
+  CREATE INDEX IF NOT EXISTS idx_order_client ON orders(client_name);
+`);
+
+const ORDER_JSON_COLS = new Set([]);
+const ORDER_RENAME = {
+  client_name:       'clientName',
+  client_contact:    'clientContact',
+  dataset_id:        'datasetId',
+  total_episodes:    'totalEpisodes',
+  completed_episodes:'completedEpisodes',
+  due_date:          'dueDate',
+  actual_cost:       'actualCost',
+  created_by:        'createdBy',
+  created_at:        'createdAt',
+  updated_at:        'updatedAt',
+};
+
+function parseOrderRow(row) {
+  if (!row) return null;
+  const out = {};
+  for (const [k, v] of Object.entries(row)) {
+    out[ORDER_RENAME[k] ?? k] = v;
+  }
+  return out;
+}
+
+const Orders = {
+  getAll: () =>
+    db.prepare('SELECT * FROM orders ORDER BY created_at DESC').all().map(parseOrderRow),
+
+  getById: (id) =>
+    parseOrderRow(db.prepare('SELECT * FROM orders WHERE id = ?').get(id)),
+
+  insert: (o) => {
+    const id = o.id || `order_${Date.now()}_${require('crypto').randomBytes(3).toString('hex')}`;
+    const now = new Date().toISOString();
+    db.prepare(`
+      INSERT OR REPLACE INTO orders
+        (id, title, description, client_name, client_contact, status, priority,
+         dataset_id, total_episodes, completed_episodes, due_date, budget,
+         actual_cost, created_by, created_at, updated_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    `).run(id, o.title, o.description || null, o.clientName || null,
+      o.clientContact || null, o.status || 'draft', o.priority || 'normal',
+      o.datasetId || null, o.totalEpisodes || 0, o.completedEpisodes || 0,
+      o.dueDate || null, o.budget || null, o.actualCost || 0,
+      o.createdBy || null, o.createdAt || now, now);
+    return Orders.getById(id);
+  },
+
+  update: (id, updates) => {
+    const existing = Orders.getById(id);
+    if (!existing) return null;
+    const merged = { ...existing, ...updates, updatedAt: new Date().toISOString() };
+    return Orders.insert({ ...merged, id });
+  },
+
+  delete: (id) => {
+    db.prepare('DELETE FROM orders WHERE id = ?').run(id);
+  },
+
+  getStats: () => {
+    const total = db.prepare('SELECT COUNT(*) as n FROM orders').get().n;
+    const byStatus = db.prepare('SELECT status, COUNT(*) as count FROM orders GROUP BY status').all();
+    const totalBudget = db.prepare('SELECT COALESCE(SUM(budget),0) as s FROM orders').get().s;
+    const totalCost = db.prepare('SELECT COALESCE(SUM(actual_cost),0) as s FROM orders').get().s;
+    return {
+      total,
+      byStatus: Object.fromEntries(byStatus.map(r => [r.status, r.count])),
+      totalBudget,
+      totalCost,
+    };
+  },
+};
+
+// ─── Billing ──────────────────────────────────────────────────────────────────
+db.exec(`
+  CREATE TABLE IF NOT EXISTS billing (
+    id              TEXT PRIMARY KEY,
+    order_id        TEXT,
+    type            TEXT NOT NULL DEFAULT 'annotation',
+    amount          REAL NOT NULL DEFAULT 0,
+    currency        TEXT DEFAULT 'USD',
+    rate_per_episode REAL DEFAULT 0,
+    episodes_count  INTEGER DEFAULT 0,
+    status          TEXT NOT NULL DEFAULT 'pending',
+    note            TEXT,
+    created_at      TEXT,
+    updated_at      TEXT
+  );
+  CREATE INDEX IF NOT EXISTS idx_billing_order  ON billing(order_id);
+  CREATE INDEX IF NOT EXISTS idx_billing_status ON billing(status);
+`);
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS billing_rates (
+    id          TEXT PRIMARY KEY,
+    type        TEXT NOT NULL UNIQUE,
+    rate        REAL NOT NULL,
+    currency    TEXT DEFAULT 'USD',
+    unit        TEXT DEFAULT 'per_episode',
+    description TEXT,
+    updated_at  TEXT
+  );
+`);
+
+// Seed default rates
+const rateCount = db.prepare('SELECT COUNT(*) as n FROM billing_rates').get().n;
+if (rateCount === 0) {
+  const now = new Date().toISOString();
+  const seedRates = db.prepare(`INSERT OR IGNORE INTO billing_rates (id, type, rate, currency, unit, description, updated_at) VALUES (?,?,?,?,?,?,?)`);
+  seedRates.run('rate_annotation', 'annotation', 2.50, 'USD', 'per_episode', 'Manual annotation per episode', now);
+  seedRates.run('rate_review', 'review', 1.00, 'USD', 'per_episode', 'Quality review per episode', now);
+  seedRates.run('rate_vqa', 'vqa', 5.00, 'USD', 'per_episode', 'Structured VQA analysis per episode', now);
+  seedRates.run('rate_auto', 'auto_annotation', 0.50, 'USD', 'per_episode', 'Automated VLM annotation per episode', now);
+  console.log('[DB] Default billing rates seeded');
+}
+
+const BILLING_RENAME = {
+  order_id:        'orderId',
+  rate_per_episode:'ratePerEpisode',
+  episodes_count:  'episodesCount',
+  created_at:      'createdAt',
+  updated_at:      'updatedAt',
+};
+
+function parseBillingRow(row) {
+  if (!row) return null;
+  const out = {};
+  for (const [k, v] of Object.entries(row)) {
+    out[BILLING_RENAME[k] ?? k] = v;
+  }
+  return out;
+}
+
+const Billing = {
+  getAll: () =>
+    db.prepare('SELECT * FROM billing ORDER BY created_at DESC').all().map(parseBillingRow),
+
+  getById: (id) =>
+    parseBillingRow(db.prepare('SELECT * FROM billing WHERE id = ?').get(id)),
+
+  getByOrder: (orderId) =>
+    db.prepare('SELECT * FROM billing WHERE order_id = ? ORDER BY created_at DESC')
+      .all(orderId).map(parseBillingRow),
+
+  insert: (b) => {
+    const id = b.id || `bill_${Date.now()}_${require('crypto').randomBytes(3).toString('hex')}`;
+    const now = new Date().toISOString();
+    db.prepare(`
+      INSERT OR REPLACE INTO billing
+        (id, order_id, type, amount, currency, rate_per_episode,
+         episodes_count, status, note, created_at, updated_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?)
+    `).run(id, b.orderId || null, b.type || 'annotation',
+      b.amount || 0, b.currency || 'USD', b.ratePerEpisode || 0,
+      b.episodesCount || 0, b.status || 'pending',
+      b.note || null, b.createdAt || now, now);
+    return Billing.getById(id);
+  },
+
+  update: (id, updates) => {
+    const existing = Billing.getById(id);
+    if (!existing) return null;
+    const merged = { ...existing, ...updates, updatedAt: new Date().toISOString() };
+    return Billing.insert({ ...merged, id });
+  },
+
+  delete: (id) => {
+    db.prepare('DELETE FROM billing WHERE id = ?').run(id);
+  },
+
+  getRates: () =>
+    db.prepare('SELECT * FROM billing_rates ORDER BY type').all().map(r => ({
+      id: r.id, type: r.type, rate: r.rate, currency: r.currency,
+      unit: r.unit, description: r.description, updatedAt: r.updated_at,
+    })),
+
+  updateRate: (type, rate, description) => {
+    const now = new Date().toISOString();
+    db.prepare('UPDATE billing_rates SET rate = ?, description = COALESCE(?, description), updated_at = ? WHERE type = ?')
+      .run(rate, description || null, now, type);
+    return db.prepare('SELECT * FROM billing_rates WHERE type = ?').get(type);
+  },
+
+  calculate: (type, episodesCount) => {
+    const rateRow = db.prepare('SELECT * FROM billing_rates WHERE type = ?').get(type);
+    if (!rateRow) return { error: 'Unknown billing type' };
+    return {
+      type, rate: rateRow.rate, currency: rateRow.currency,
+      unit: rateRow.unit, episodesCount,
+      totalAmount: Math.round(rateRow.rate * episodesCount * 100) / 100,
+    };
+  },
+
+  getSummary: () => {
+    const total = db.prepare('SELECT COUNT(*) as n FROM billing').get().n;
+    const totalAmount = db.prepare('SELECT COALESCE(SUM(amount),0) as s FROM billing').get().s;
+    const byStatus = db.prepare('SELECT status, COUNT(*) as count, COALESCE(SUM(amount),0) as total FROM billing GROUP BY status').all();
+    const byType = db.prepare('SELECT type, COUNT(*) as count, COALESCE(SUM(amount),0) as total FROM billing GROUP BY type').all();
+    const pendingAmount = db.prepare("SELECT COALESCE(SUM(amount),0) as s FROM billing WHERE status = 'pending'").get().s;
+    const paidAmount = db.prepare("SELECT COALESCE(SUM(amount),0) as s FROM billing WHERE status = 'paid'").get().s;
+    return {
+      total, totalAmount, pendingAmount, paidAmount,
+      byStatus: byStatus.map(r => ({ status: r.status, count: r.count, total: r.total })),
+      byType: byType.map(r => ({ type: r.type, count: r.count, total: r.total })),
+    };
+  },
+};
+
 module.exports = {
-  db, Datasets, Episodes, Annotations, Collections, Lineage,
+  db, Datasets, Episodes, Annotations, Collections, Lineage, Tasks, Reviews, Orders, Billing,
   syncFromJSON, getStats, getFullStats, getDatasetStats, getAnnotationStats, getTimeline
 };

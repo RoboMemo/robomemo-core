@@ -18,6 +18,111 @@ export interface AuthResponse {
   user: User;
 }
 
+// ========== Task Types ==========
+
+export type TaskType = 'annotation' | 'review' | 'vqa';
+export type TaskStatus = 'pending' | 'assigned' | 'in_progress' | 'completed' | 'rejected';
+export type TaskPriority = 'low' | 'normal' | 'high' | 'urgent';
+
+export interface Task {
+  id: string;
+  title: string;
+  description?: string;
+  type: TaskType;
+  status: TaskStatus;
+  priority: TaskPriority;
+  datasetId?: string;
+  episodeIds?: string[];
+  assignedTo?: string;
+  assignedBy?: string;
+  reviewerId?: string;
+  dueDate?: string;
+  startedAt?: string;
+  completedAt?: string;
+  result?: Record<string, any>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface TaskStats {
+  total: number;
+  byStatus: Record<string, number>;
+  byType: Record<string, number>;
+  byPriority: Record<string, number>;
+  byAssignee: Record<string, number>;
+}
+
+// ========== Review & Quality Types ==========
+
+export type ReviewStatus = 'pending' | 'approved' | 'rejected' | 'needs_revision';
+
+export interface Review {
+  id: string;
+  taskId?: string;
+  annotationId?: string;
+  reviewerId: string;
+  status: ReviewStatus;
+  score?: number;
+  feedback?: string;
+  createdAt: string;
+}
+
+export interface ReviewStats {
+  total: number;
+  byStatus: Record<string, number>;
+  averageScore: number | null;
+  byReviewer: Array<{ reviewerId: string; count: number; averageScore: number | null }>;
+}
+
+export interface QualityDashboard {
+  total: number;
+  byStatus: Record<string, number>;
+  averageScore: number | null;
+  byReviewer: Array<{ reviewerId: string; count: number; averageScore: number | null }>;
+  completedTasks: number;
+  qualityScore: number;
+  reviewBacklog: number;
+}
+
+export interface AnnotatorQuality {
+  userId: string;
+  totalReviews: number;
+  averageScore: number | null;
+  approved: number;
+  rejected: number;
+  approvalRate: number;
+}
+
+// ========== Order Types ==========
+
+export type OrderStatus = 'draft' | 'pending' | 'in_progress' | 'review' | 'completed' | 'cancelled';
+
+export interface Order {
+  id: string;
+  title: string;
+  description?: string;
+  clientName?: string;
+  clientContact?: string;
+  status: OrderStatus;
+  priority: string;
+  datasetId?: string;
+  totalEpisodes: number;
+  completedEpisodes: number;
+  dueDate?: string;
+  budget?: number;
+  actualCost: number;
+  createdBy?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface OrderStats {
+  total: number;
+  byStatus: Record<string, number>;
+  totalBudget: number;
+  totalCost: number;
+}
+
 // ========== Audit Log Types ==========
 
 export interface AuditEvent {
