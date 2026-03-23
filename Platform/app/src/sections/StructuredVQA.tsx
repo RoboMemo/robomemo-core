@@ -652,8 +652,11 @@ export default function StructuredVQA() {
   const [progress, setProgress] = useState(0);
   const [progressMsg, setProgressMsg] = useState('');
   const [analysis, setAnalysis] = useState<StructuredVQAAnalysis | null>(null);
+  const [annotationId, setAnnotationId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [activeCategory, setActiveCategory] = useState('temporal');
+  const [isExporting, setIsExporting] = useState(false);
+  const [isCreatingTask, setIsCreatingTask] = useState(false);
 
   // History state
   const [history, setHistory] = useState<VQAAnnotationRecord[]>([]);
@@ -779,6 +782,7 @@ export default function StructuredVQA() {
 
       if (result.success && result.analysis) {
         setAnalysis(result.analysis);
+        setAnnotationId(result.annotationId || null);
         // Refresh history
         api.getStructuredAnalyses().then(setHistory).catch(console.error);
       } else {
@@ -804,8 +808,44 @@ export default function StructuredVQA() {
     URL.revokeObjectURL(url);
   };
 
+  const handleCreateReviewTask = async () => {
+    if (!analysis || !annotationId) return;
+    setIsCreatingTask(true);
+    try {
+      const taskTitle = `审核 VQA 分析: ${analysis.summary?.task_description || videoPath || annotationId}`;
+      await api.createTask({
+        title: taskTitle,
+        type: 'review',
+        status: 'pending',
+        priority: 'normal',
+        description: `VQA 分析审核任务\n视频: ${videoPath}\n分析 ID: ${annotationId}\nProvider: ${selectedProvider}`,
+      });
+      alert('审核任务已创建！可在 Task Management 中查看。');
+    } catch (err: any) {
+      alert('创建任务失败: ' + (err.message || '未知错误'));
+    } finally {
+      setIsCreatingTask(false);
+    }
+  };
+
+  const handleExportLeRobot = async () => {
+    if (!annotationId) return;
+    setIsExporting(true);
+    try {
+      const result = await api.exportVQAToLeRobot({ annotationId });
+      if (result.success) {
+        alert(`LeRobot 导出成功！\n输出目录: ${result.output_dir}\n文件数: ${result.files_created?.length || 'N/A'}`);
+      }
+    } catch (err: any) {
+      alert('LeRobot 导出失败: ' + (err.message || '未知错误'));
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
   const loadFromHistory = (record: VQAAnnotationRecord) => {
     setAnalysis(record.analysis);
+    setAnnotationId(record.id || null);
     setVideoPath(record.videoPath || '');
     setShowHistory(false);
     setError(null);
@@ -838,6 +878,18 @@ export default function StructuredVQA() {
             <Button variant="outline" size="sm" onClick={exportAnalysis}>
               <Download className="w-3.5 h-3.5 mr-1.5" />
               导出 JSON
+            </Button>
+          )}
+          {analysis && annotationId && (
+            <Button variant="outline" size="sm" onClick={handleCreateReviewTask} disabled={isCreatingTask}>
+              {isCreatingTask ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> : <CheckCircle2 className="w-3.5 h-3.5 mr-1.5" />}
+              创建审核任务
+            </Button>
+          )}
+          {analysis && annotationId && (
+            <Button size="sm" onClick={handleExportLeRobot} disabled={isExporting}>
+              {isExporting ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> : <Download className="w-3.5 h-3.5 mr-1.5" />}
+              导出 LeRobot
             </Button>
           )}
         </div>

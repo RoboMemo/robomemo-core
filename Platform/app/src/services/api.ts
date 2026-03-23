@@ -729,6 +729,17 @@ class ApiService {
   async getStructuredAnalysis(id: string): Promise<VQAAnnotationRecord> {
     return this.fetch(`/vlm/structured-analysis/${id}`);
   }
+
+  async exportVQAToLeRobot(params: {
+    annotationId: string;
+    outputDir?: string;
+    robotType?: string;
+  }): Promise<{ success: boolean; output_dir: string; total_episodes?: number; files_created?: string[] }> {
+    return this.fetch('/vlm/export-lerobot', {
+      method: 'POST',
+      body: JSON.stringify(params),
+    });
+  }
 }
 
 export const api = new ApiService();

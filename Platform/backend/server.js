@@ -910,6 +910,153 @@ app.get('/api/vlm/structured-analysis/:id', (req, res) => {
 });
 
 /**
+ * Export VQA analysis to LeRobot format
+ * POST /api/vlm/export-lerobot
+ * Body: { annotationId, outputDir?, robotType? }
+ */
+app.post('/api/vlm/export-lerobot', async (req, res) => {
+  const { annotationId, outputDir, robotType = 'single_arm' } = req.body;
+
+  if (!annotationId) {
+    return res.status(400).json({ error: 'annotationId is required' });
+  }
+
+  try {
+    const record = Annotations.getVQAById(annotationId);
+    if (!record) {
+      return res.status(404).json({ error: 'VQA analysis not found' });
+    }
+
+    const analysis = record.analysis || record.data?.analysis;
+    if (!analysis) {
+      return res.status(400).json({ error: 'No analysis data in this record' });
+    }
+
+    // Convert 7-category VQA JSON → lerobot_exporter episode format
+    const temporal = analysis.temporal || {};
+    const spatial = analysis.spatial || {};
+    const mechanics = analysis.mechanics || {};
+    const summary = analysis.summary || {};
+    const trajectory = analysis.trajectory || {};
+    const metadata = analysis.metadata || {};
+
+    const actionSequence = temporal.action_sequence || temporal.actions || [];
+    const contacts = mechanics.contacts || mechanics.contact_events || [];
+    const totalFrames = metadata.total_frames || metadata.frame_count || 0;
+    const fps = metadata.fps || 30;
+    const duration = metadata.duration || (totalFrames / fps);
+
+    // Build phases from action_sequence
+    const phases = actionSequence.map((action, idx) => {
+      const actionStr = typeof action === 'string' ? action : (action.action || action.description || 'unknown');
+      const target = typeof action === 'object' ? (action.target || action.object || '') : '';
+      const startFrame = typeof action === 'object' ? (action.start_frame || 0) : 0;
+      const endFrame = typeof action === 'object' ? (action.end_frame || 0) : 0;
+      const startTime = typeof action === 'object' ? (action.start_time || startFrame / fps) : 0;
+      const endTime = typeof action === 'object' ? (action.end_time || endFrame / fps) : 0;
+
+      // Match contact info to this phase
+      const contact = contacts[idx] || {};
+      return {
+        phase_idx: idx,
+        start_frame: startFrame,
+        end_frame: endFrame,
+        start_time: startTime,
+        end_time: endTime,
+        action_primitive: actionStr,
+        target_object: target || (spatial.objects?.[0]?.name || 'unknown'),
+        gripper_state: contact.gripper_state || 'open',
+        phase_name: `phase_${idx}`,
+        confidence: action.confidence || 0.8,
+        mechanics: {
+          contact_type: contact.contact_type || contact.type || 'none',
+          force_level: contact.force_level || contact.force || 'none',
+          contact_points: contact.contact_points || '',
+          motion_direction: trajectory.motion_type || 'linear',
+        },
+      };
+    });
+
+    // If no actions found, create a single phase from summary
+    if (phases.length === 0) {
+      phases.push({
+        phase_idx: 0,
+        start_frame: 0,
+        end_frame: totalFrames,
+        start_time: 0,
+        end_time: duration,
+        action_primitive: summary.task_description || 'manipulation',
+        target_object: spatial.objects?.[0]?.name || 'unknown',
+        gripper_state: 'open',
+        phase_name: 'phase_0',
+        confidence: 0.5,
+        mechanics: { contact_type: 'none', force_level: 'none', contact_points: '', motion_direction: 'linear' },
+      });
+    }
+
+    const episode = {
+      episode_id: annotationId,
+      task_summary: summary.task_description || summary.description || 'Robot manipulation task',
+      video_info: {
+        total_frames: totalFrames,
+        fps: fps,
+        duration: duration,
+      },
+      video_path: record.videoPath || '',
+      phases: phases,
+      model: record.model || 'unknown',
+      success: true,
+    };
+
+    // Write temp JSONL
+    const tmpDir = path.join(__dirname, 'uploads', 'exports');
+    if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir, { recursive: true });
+    const tmpJsonl = path.join(tmpDir, `vqa_export_${Date.now()}.jsonl`);
+    fs.writeFileSync(tmpJsonl, JSON.stringify(episode) + '\n');
+
+    // Call lerobot_exporter.py
+    const exportDir = outputDir || path.join(tmpDir, `lerobot_${annotationId}_${Date.now()}`);
+    const pythonExe = path.join(__dirname, 'venv', 'bin', 'python3');
+    const exporterScript = path.join(__dirname, 'lerobot_exporter.py');
+
+    const exportProcess = spawn(
+      fs.existsSync(pythonExe) ? pythonExe : 'python3',
+      [exporterScript, tmpJsonl, '--output-dir', exportDir, '--robot-type', robotType]
+    );
+
+    let stdout = '';
+    let stderr = '';
+    exportProcess.stdout.on('data', (d) => { stdout += d.toString(); });
+    exportProcess.stderr.on('data', (d) => { stderr += d.toString(); });
+
+    exportProcess.on('close', (code) => {
+      // Clean up temp JSONL
+      try { fs.unlinkSync(tmpJsonl); } catch (_) {}
+
+      if (code !== 0) {
+        console.error('LeRobot export failed:', stderr);
+        return res.status(500).json({ error: 'LeRobot export failed', details: stderr });
+      }
+
+      try {
+        const result = JSON.parse(stdout);
+        res.json({ success: true, ...result });
+      } catch (_) {
+        res.json({ success: true, output_dir: exportDir, message: stderr.trim() });
+      }
+    });
+
+    exportProcess.on('error', (err) => {
+      res.status(500).json({ error: 'Failed to start export process', details: err.message });
+    });
+
+  } catch (error) {
+    console.error('Export error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
  * Get VLM provider capabilities
  * GET /api/vlm/providers
  */

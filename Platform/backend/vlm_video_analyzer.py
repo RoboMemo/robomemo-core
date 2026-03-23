@@ -581,22 +581,129 @@ class OllamaAnalyzer(VLMAnalyzer):
         )
         print(f"使用 Ollama/{self.model} 分析 ({len(frames_data)} 帧)...", file=sys.stderr)
 
-        prompt = self.VQA_PROMPT_TEMPLATE.format(
-            total_frames=video_info['total_frames'],
-            duration=video_info['duration'],
-            fps=video_info['fps']
-        )
-        # 把时间戳信息注入 prompt 开头（本地模型无法交替图像与文本）
         ts_ctx = " | ".join(
             f"Frame{i+1}={fd['timestamp_str']}" for i, fd in enumerate(frames_data)
         )
-        full_prompt = f"帧时间戳: {ts_ctx}\n\n{prompt}"
-
-        # base64 图像列表（纯 base64，不含 data URI 前缀）
         images = [
             self.image_to_base64(fd['image'], format='JPEG')
             for fd in frames_data
         ]
+        video_ctx = f"VIDEO: {video_info['total_frames']} total frames, {video_info['duration']:.1f}s, {video_info['fps']:.1f} FPS.\n帧时间戳: {ts_ctx}"
+
+        # ── Try 1: single-call with full prompt ──
+        print("[Ollama] 尝试单次调用...", file=sys.stderr)
+        analysis = self._call_vlm_json(
+            _req, images, video_ctx,
+            self.VQA_PROMPT_TEMPLATE.format(
+                total_frames=video_info['total_frames'],
+                duration=video_info['duration'],
+                fps=video_info['fps']
+            )
+        )
+
+        REQUIRED_KEYS = {'temporal', 'spatial', 'attribute', 'mechanics', 'reasoning', 'summary', 'trajectory'}
+        present = set(analysis.keys()) & REQUIRED_KEYS if not analysis.get('error') else set()
+        missing = REQUIRED_KEYS - present
+
+        # ── Fallback: stepwise calls for missing categories ──
+        if len(missing) >= 3 or analysis.get('error'):
+            print(f"[Ollama] 单次调用缺失 {len(missing)} 类，fallback 到分步模式...", file=sys.stderr)
+            analysis = self._stepwise_analysis(_req, images, video_ctx, video_info)
+
+        # Fill defaults for any still-missing categories
+        defaults = {
+            'temporal': {'action_sequence': [], 'relationships': []},
+            'spatial': {'key_relationships': [], 'trajectory_spatial': ''},
+            'attribute': {'objects': []},
+            'mechanics': {'contacts': [], 'force_profile': ''},
+            'reasoning': {'action_justifications': [], 'overall_strategy': ''},
+            'summary': {'task_description': '', 'start_state': '', 'end_state': '',
+                        'success': False, 'key_milestones': [], 'duration': ''},
+            'trajectory': {'motion_segments': [], 'overall_path': ''},
+            'visual_evidence': {'key_frames': []},
+            'confidence_scores': {k: 0.0 for k in REQUIRED_KEYS},
+        }
+        for key, default_val in defaults.items():
+            if key not in analysis:
+                analysis[key] = default_val
+
+        analysis['metadata'] = {
+            'video_path': video_path,
+            'video_info': video_info,
+            'num_frames_analyzed': len(frames_data),
+            'model': f"ollama/{self.model}",
+            'frame_timestamps': [f['timestamp_str'] for f in frames_data],
+            'local': True,
+        }
+        return analysis
+
+    # ── Stepwise analysis: 3 smaller calls ──────────────────────────
+
+    _STEP_PROMPTS = [
+        {
+            'keys': ['temporal', 'spatial', 'attribute'],
+            'prompt': """Analyze this robot video. Return ONLY a JSON object with these 3 keys:
+
+1. "temporal": {{"action_sequence": [list of observed actions], "relationships": ["A BEFORE B", ...]}}
+   Each action: {{"action": str, "timestamp": str, "frame_range": [int,int], "description": str, "grounding": {{}}}}
+
+2. "spatial": {{"key_relationships": [spatial relations between objects], "trajectory_spatial": str}}
+   Each: {{"timestamp": str, "relationship": str, "details": str, "grounding": {{}}}}
+
+3. "attribute": {{"objects": [objects you see]}}
+   Each: {{"name": str, "properties": {{"color":str,"material":str,"shape":str,"size":str}}, "state_changes": [str], "grounding": {{}}}}
+
+{video_ctx}
+
+Describe ONLY what you see. Return valid JSON only, no markdown."""
+        },
+        {
+            'keys': ['mechanics', 'reasoning'],
+            'prompt': """Analyze contact mechanics and reasoning in this robot video. Return ONLY a JSON object with 2 keys:
+
+1. "mechanics": {{"contacts": [contact events], "force_profile": str}}
+   Each: {{"timestamp": str, "contact_type": str, "force_level": "light"|"medium"|"strong", "contact_points": str, "area": str, "grounding": {{}}}}
+
+2. "reasoning": {{"action_justifications": [why each action], "overall_strategy": str}}
+   Each: {{"action": str, "reason": str, "constraints": [str], "grounding": {{}}}}
+
+{video_ctx}
+
+Describe ONLY what you observe. Return valid JSON only, no markdown."""
+        },
+        {
+            'keys': ['summary', 'trajectory'],
+            'prompt': """Summarize this robot manipulation video. Return ONLY a JSON object with 2 keys:
+
+1. "summary": {{"task_description": str, "start_state": str, "end_state": str, "success": bool, "key_milestones": [str], "duration": str}}
+
+2. "trajectory": {{"motion_segments": [segments], "overall_path": str}}
+   Each segment: {{"segment": str, "time_range": str, "motion_type": "linear"|"curved"|"rotational", "velocity": "slow"|"medium"|"fast", "waypoints": [str], "grounding": {{}}}}
+
+{video_ctx}
+
+Describe ONLY what you observe. Return valid JSON only, no markdown."""
+        },
+    ]
+
+    def _stepwise_analysis(self, _req, images: List[str], video_ctx: str, video_info: dict) -> Dict[str, Any]:
+        """Run 3 smaller VLM calls, each producing 2-3 categories."""
+        merged = {}
+        for i, step in enumerate(self._STEP_PROMPTS):
+            print(f"  [Step {i+1}/3] 生成 {', '.join(step['keys'])}...", file=sys.stderr)
+            prompt = step['prompt'].replace('{video_ctx}', video_ctx)
+            partial = self._call_vlm_json(_req, images, '', prompt)
+            if not partial.get('error'):
+                for key in step['keys']:
+                    if key in partial:
+                        merged[key] = partial[key]
+        return merged
+
+    # ── Shared VLM call + JSON parse ──────────────────────────────────
+
+    def _call_vlm_json(self, _req, images: List[str], prefix: str, prompt: str) -> Dict[str, Any]:
+        """Call Ollama and parse JSON response with repair."""
+        full_prompt = f"{prefix}\n\n{prompt}" if prefix else prompt
 
         payload = {
             "model": self.model,
@@ -615,12 +722,12 @@ class OllamaAnalyzer(VLMAnalyzer):
             resp = _req.post(
                 f"{self.ollama_url}/api/chat",
                 json=payload,
-                timeout=600,        # 本地模型最多等 10 分钟
+                timeout=600,
             )
             resp.raise_for_status()
             result_text = resp.json()["message"]["content"]
 
-            # Strip markdown escape artifacts (\_  →  _)
+            # Strip markdown escape artifacts
             result_text = result_text.replace("\\_", "_")
 
             # 去掉 Markdown 代码块
@@ -635,53 +742,13 @@ class OllamaAnalyzer(VLMAnalyzer):
             if start >= 0 and end > start:
                 result_text = result_text[start:end]
 
-            # Attempt to repair truncated or extra-data JSON
             result_text = repair_truncated_json(result_text.strip())
-
-            analysis = json.loads(result_text)
-
-            # Fill in missing categories (truncated output may be partial)
-            defaults = {
-                'temporal': {'action_sequence': [], 'relationships': []},
-                'spatial': {'key_relationships': [], 'trajectory_spatial': ''},
-                'attribute': {'objects': []},
-                'mechanics': {'contacts': [], 'force_profile': ''},
-                'reasoning': {'action_justifications': [], 'overall_strategy': ''},
-                'summary': {'task_description': '', 'start_state': '', 'end_state': '',
-                            'success': False, 'key_milestones': [], 'duration': ''},
-                'trajectory': {'motion_segments': [], 'overall_path': ''},
-                'visual_evidence': {'key_frames': []},
-                'confidence_scores': {k: 0.0 for k in
-                    ['temporal', 'spatial', 'attribute', 'mechanics', 'reasoning', 'summary', 'trajectory']},
-            }
-            for key, default_val in defaults.items():
-                if key not in analysis:
-                    analysis[key] = default_val
-            analysis['metadata'] = {
-                'video_path': video_path,
-                'video_info': video_info,
-                'num_frames_analyzed': len(frames_data),
-                'model': f"ollama/{self.model}",
-                'frame_timestamps': [f['timestamp_str'] for f in frames_data],
-                'local': True,
-            }
-            return analysis
+            return json.loads(result_text)
 
         except json.JSONDecodeError as e:
-            # 本地模型有时 JSON 不完整，保存原始文本供调试
-            return {
-                'error': f'JSON 解析失败: {e}',
-                'raw_response': result_text[:3000],
-                'video_path': video_path,
-                'model': f"ollama/{self.model}",
-                'metadata': {'model': f"ollama/{self.model}", 'local': True},
-            }
+            return {'error': f'JSON parse failed: {e}', 'raw': result_text[:2000]}
         except Exception as e:
-            return {
-                'error': str(e),
-                'video_path': video_path,
-                'model': f"ollama/{self.model}",
-            }
+            return {'error': str(e)}
 
 
 def create_analyzer(provider: str = "gemini", api_key: str = None, model: str = None) -> VLMAnalyzer:
