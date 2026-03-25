@@ -381,6 +381,8 @@ class AutoLabelPipeline:
         # Step 1b: ask LLM to segment based on those descriptions (no images needed here)
         prompt = f"""A robot manipulation video has {video_info['total_frames']} frames at {video_info['fps']} FPS ({video_info['duration']:.1f}s total).
 
+Frame timestamps for the sampled frames: {ts_context}
+
 Here are per-frame descriptions from {len(frames)} sampled frames:
 {combined_desc}
 
