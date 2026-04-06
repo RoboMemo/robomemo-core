@@ -1,0 +1,79 @@
+{
+  "codebase_version": "2.1",
+  "robot_type": "single_arm",
+  "total_episodes": 1,
+  "total_frames": 6543,
+  "fps": 24.0,
+  "total_tasks": 1,
+  "splits": {
+    "train": "0:1"
+  },
+  "data_path": "data/chunk-{chunk_index:03d}/episode_{episode_index:06d}.json",
+  "features": {
+    "observation.task_description": {
+      "dtype": "string",
+      "shape": [
+        1
+      ],
+      "description": "Natural language task instruction for VLA model"
+    },
+    "action_primitive": {
+      "dtype": "string",
+      "shape": [
+        1
+      ],
+      "description": "Predicted action primitive from VLM"
+    },
+    "target_object": {
+      "dtype": "string",
+      "shape": [
+        1
+      ],
+      "description": "Target object of the action"
+    },
+    "gripper_state": {
+      "dtype": "string",
+      "shape": [
+        1
+      ],
+      "description": "Gripper state: open/closing/closed/opening"
+    },
+    "contact_type": {
+      "dtype": "string",
+      "shape": [
+        1
+      ],
+      "description": "Contact type: none/point/surface/edge/wrap"
+    },
+    "force_level": {
+      "dtype": "string",
+      "shape": [
+        1
+      ],
+      "description": "Estimated force level: none/light/medium/strong"
+    },
+    "motion_direction": {
+      "dtype": "string",
+      "shape": [
+        1
+      ],
+      "description": "Motion direction: linear/rotational/complex"
+    },
+    "phase_name": {
+      "dtype": "string",
+      "shape": [
+        1
+      ],
+      "description": "Phase label from temporal segmentation"
+    },
+    "confidence": {
+      "dtype": "float32",
+      "shape": [
+        1
+      ],
+      "description": "VLM prediction confidence score 0–1"
+    }
+  },
+  "vlm_backend": "minicpm-v:latest + qwen3:32b",
+  "created_at": "2026-04-05T14:35:05Z"
+}
