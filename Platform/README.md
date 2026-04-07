@@ -212,6 +212,27 @@ Collection → Storage → Annotation → Augmentation → Export
 2. Implement generation logic
 3. Update UI in `app/src/sections/DataAugmentation.tsx`
 
+## Web3.0 Trade System 
+### Kickoff
+
+  启动步骤
+
+  ### 终端 1: 启动 Hardhat 本地节点
+  cd Platform/contracts && npm install && npm run node
+
+  ### 终端 2: 部署合约
+  cd Platform/contracts && npm run deploy:local
+  # → 自动生成 backend/web3-deployment.json
+
+  ### 终端 3: 后端
+  cd Platform/backend && npm install && npm run dev
+
+  ### 终端 4: 前端
+  cd Platform/app && npm install && npm run dev
+
+  MetaMask 添加本地网络：RPC http://127.0.0.1:8545，ChainID 31337，导入 hardhat node 输出的测试账户私钥即可有 10000 ETH 测试资金。
+
+  
 ## License
 
 MIT License
