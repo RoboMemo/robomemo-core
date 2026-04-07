@@ -44,6 +44,11 @@ cross_embodiment_retarget_demo/checkpoints/
 cross_embodiment_retarget_demo/logs/
 *.onnx
 
+# ──── BONES-SEED Dataset (large data, download separately) ──────────────────
+motion_retarget_project/bones-seed/
+motion_retarget_project/retargeted_motions_bones/
+*.tar
+
 # ──── OS ──────────────────────────────────────────────────────────────────────
 .DS_Store
 Thumbs.db
