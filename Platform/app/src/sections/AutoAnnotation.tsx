@@ -15,7 +15,8 @@ import {
   Loader2,
   Video,
   AlignLeft,
-  ListTree
+  ListTree,
+  Zap
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -365,40 +366,176 @@ export default function AutoAnnotation() {
 
       {/* Main Content */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Video Player */}
+        {/* Episode Data Preview */}
         <Card className="w-full">
           <CardHeader>
-            <CardTitle className="flex items-center"><Video className="mr-2" /> Video Preview</CardTitle>
+            <CardTitle className="flex items-center"><Video className="mr-2" /> Episode Data Preview</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="aspect-video bg-muted rounded-lg overflow-hidden">
-              <video
-                ref={videoRef}
-                className="w-full h-full"
-                src={selectedEpisode ? `/placeholder.mp4` : undefined}
-                controls
-              />
-            </div>
-            <div className="flex items-center justify-center gap-2 mt-4">
-              <Button size="icon" variant="outline" onClick={() => videoRef.current?.load()}>
-                <SkipBack className="h-5 w-5" />
-              </Button>
-              <Button size="icon" variant="outline" onClick={togglePlayback}>
-                {isPlaying ? <Pause className="h-5 w-5" /> : <Play className="h-5 w-5" />}
-              </Button>
-              <div className="w-full px-4">
-                <Slider
-                  value={[currentFrame]}
-                  max={videoRef.current?.duration ? videoRef.current.duration * 30 : 300}
-                  onValueChange={(value) => {
-                    if (videoRef.current) {
-                      videoRef.current.currentTime = value[0] / 30;
-                      setCurrentFrame(value[0]);
-                    }
-                  }}
-                />
+            {!selectedEpisode ? (
+              <div className="aspect-video bg-muted rounded-lg flex items-center justify-center text-muted-foreground">
+                <div className="text-center">
+                  <Video className="w-12 h-12 mx-auto mb-2 opacity-50" />
+                  <p className="text-sm">Select a dataset and episode to preview</p>
+                </div>
               </div>
-            </div>
+            ) : (
+              <div className="space-y-4">
+                {/* Episode Info */}
+                {(() => {
+                  const ep = episodes.find(e => e.id === selectedEpisode);
+                  const ds = datasets.find(d => d.id === selectedDataset);
+                  if (!ep) return null;
+                  
+                  const sensorConfig = ds?.sensorConfig;
+                  const sensors = sensorConfig?.sensors || [];
+                  const rgbdSensors = sensors.filter((s: any) => s.type === 'rgbd' || s.type === 'camera' || s.type === 'rgb');
+                  const ftSensors = sensors.filter((s: any) => s.type === 'force_torque');
+                  const otherSensors = sensors.filter((s: any) => !['rgbd', 'camera', 'rgb', 'force_torque'].includes(s.type));
+                  
+                  return (
+                    <>
+                      {/* Episode header */}
+                      <div className="p-3 rounded-lg bg-muted/50 border">
+                        <div className="flex items-center justify-between mb-2">
+                          <span className="font-semibold text-sm">{ep.name || ep.id}</span>
+                          <Badge variant="secondary" className="text-xs">{(ep as any).skill || 'general'}</Badge>
+                        </div>
+                        {(ep as any).description && (
+                          <p className="text-xs text-muted-foreground mb-2">{(ep as any).description}</p>
+                        )}
+                        <div className="grid grid-cols-3 gap-2 text-xs">
+                          <div className="text-center p-1.5 rounded bg-background border">
+                            <div className="font-mono font-bold text-primary">{ep.frameCount}</div>
+                            <div className="text-muted-foreground">Frames</div>
+                          </div>
+                          <div className="text-center p-1.5 rounded bg-background border">
+                            <div className="font-mono font-bold text-primary">{ep.duration?.toFixed(1)}s</div>
+                            <div className="text-muted-foreground">Duration</div>
+                          </div>
+                          <div className="text-center p-1.5 rounded bg-background border">
+                            <div className="font-mono font-bold text-primary">{(ep as any).fps || 30} fps</div>
+                            <div className="text-muted-foreground">Frame Rate</div>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* RGBD Camera Views */}
+                      {rgbdSensors.length > 0 && (
+                        <div>
+                          <h4 className="text-sm font-semibold mb-2 flex items-center gap-1.5">
+                            📷 Camera Views ({rgbdSensors.length}x RGBD)
+                          </h4>
+                          <div className="grid gap-2" style={{ gridTemplateColumns: `repeat(${Math.min(rgbdSensors.length, 3)}, 1fr)` }}>
+                            {rgbdSensors.map((sensor: any, i: number) => (
+                              <div key={i} className="rounded-lg border overflow-hidden">
+                                <div className="aspect-video bg-gradient-to-br from-slate-800 to-slate-900 flex items-center justify-center relative">
+                                  {/* Simulated RGBD view */}
+                                  <div className="text-center">
+                                    <div className="text-2xl mb-1">
+                                      {sensor.location === 'chest' || sensor.mount === 'chest' ? '🎥' : 
+                                       sensor.location?.includes('left') || sensor.mount?.includes('left') ? '🤛' : '🤜'}
+                                    </div>
+                                    <div className="text-xs text-slate-400">{sensor.name}</div>
+                                    <div className="text-[10px] text-slate-500 mt-0.5">640×480 RGB-D</div>
+                                  </div>
+                                  {/* RGB/Depth toggle indicators */}
+                                  <div className="absolute top-1 right-1 flex gap-0.5">
+                                    <span className="text-[9px] px-1 py-0.5 rounded bg-green-500/20 text-green-400 border border-green-500/30">RGB</span>
+                                    <span className="text-[9px] px-1 py-0.5 rounded bg-blue-500/20 text-blue-400 border border-blue-500/30">Depth</span>
+                                  </div>
+                                </div>
+                                <div className="px-2 py-1.5 bg-muted/50 text-xs">
+                                  <span className="font-medium">{sensor.name}</span>
+                                  <span className="text-muted-foreground ml-1">@ {sensor.location || sensor.mount}</span>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Force/Torque Sensors */}
+                      {ftSensors.length > 0 && (
+                        <div>
+                          <h4 className="text-sm font-semibold mb-2 flex items-center gap-1.5">
+                            ⚡ Force/Torque Sensors ({ftSensors.length}x 6-axis)
+                          </h4>
+                          <div className="grid grid-cols-2 gap-2">
+                            {ftSensors.map((sensor: any, i: number) => (
+                              <div key={i} className="p-2.5 rounded-lg border bg-orange-50 dark:bg-orange-950 border-orange-200 dark:border-orange-800">
+                                <div className="flex items-center gap-2 mb-1.5">
+                                  <Zap className="w-3.5 h-3.5 text-orange-500" />
+                                  <span className="font-medium text-xs">{sensor.name}</span>
+                                </div>
+                                <div className="grid grid-cols-2 gap-1 text-[10px]">
+                                  <div className="text-center p-1 rounded bg-background/60">
+                                    <div className="font-mono text-orange-600">Fx Fy Fz</div>
+                                    <div className="text-muted-foreground">Force (N)</div>
+                                  </div>
+                                  <div className="text-center p-1 rounded bg-background/60">
+                                    <div className="font-mono text-orange-600">Tx Ty Tz</div>
+                                    <div className="text-muted-foreground">Torque (Nm)</div>
+                                  </div>
+                                </div>
+                                <div className="text-[10px] text-muted-foreground mt-1">
+                                  @ {sensor.location || sensor.mount} · 1000 Hz
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Other Sensors */}
+                      {otherSensors.length > 0 && (
+                        <div>
+                          <h4 className="text-sm font-semibold mb-2">Other Sensors</h4>
+                          <div className="flex flex-wrap gap-2">
+                            {otherSensors.map((sensor: any, i: number) => (
+                              <Badge key={i} variant="outline" className="text-xs">
+                                {sensor.name} ({sensor.type}) @ {sensor.location || sensor.mount}
+                              </Badge>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Frame Scrubber */}
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between text-xs text-muted-foreground">
+                          <span>Frame {currentFrame} / {ep.frameCount}</span>
+                          <span>{(currentFrame / ((ep as any).fps || 30)).toFixed(2)}s</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <Button size="icon" variant="outline" className="h-7 w-7" onClick={() => setCurrentFrame(0)}>
+                            <SkipBack className="h-3 w-3" />
+                          </Button>
+                          <Button size="icon" variant="outline" className="h-7 w-7" onClick={togglePlayback}>
+                            {isPlaying ? <Pause className="h-3 w-3" /> : <Play className="h-3 w-3" />}
+                          </Button>
+                          <div className="flex-1">
+                            <Slider
+                              value={[currentFrame]}
+                              max={ep.frameCount}
+                              onValueChange={(value) => setCurrentFrame(value[0])}
+                            />
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Sensor Config Name */}
+                      {sensorConfig?.name && (
+                        <div className="text-xs text-muted-foreground flex items-center gap-1.5 p-2 rounded bg-muted/30 border">
+                          <Layers className="w-3 h-3" />
+                          <span>Sensor Config: <strong>{sensorConfig.name}</strong> ({sensors.length} sensors)</span>
+                        </div>
+                      )}
+                    </>
+                  );
+                })()}
+              </div>
+            )}
           </CardContent>
         </Card>
 
