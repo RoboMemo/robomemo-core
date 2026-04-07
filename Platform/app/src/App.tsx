@@ -1,10 +1,10 @@
 import { useState } from 'react';
-import { 
-  Database, 
-  Play, 
-  Tag, 
-  BarChart3, 
-  Cpu, 
+import {
+  Database,
+  Play,
+  Tag,
+  BarChart3,
+  Cpu,
   Sparkles,
   Settings,
   Menu,
@@ -12,7 +12,8 @@ import {
   Sun,
   Volume2,
   Bell,
-  BrainCircuit
+  BrainCircuit,
+  ShoppingCart
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Sheet, SheetContent, SheetTrigger } from '@/components/ui/sheet';
@@ -29,9 +30,10 @@ import AutoAnnotation from '@/sections/AutoAnnotation';
 import StructuredVQA from '@/sections/StructuredVQA';
 import PlatformStats from '@/sections/PlatformStats';
 import GenRobotDataset from '@/sections/GenRobotDataset';
+import Web3Marketplace from '@/sections/Web3Marketplace';
 import './App.css';
 
-type Tab = 'datasets' | 'collection' | 'annotation' | 'visualization' | 'simulators' | 'augmentation' | 'autoannotation' | 'structuredvqa' | 'stats' | 'genrobot';
+type Tab = 'datasets' | 'collection' | 'annotation' | 'visualization' | 'simulators' | 'augmentation' | 'autoannotation' | 'structuredvqa' | 'stats' | 'genrobot' | 'marketplace';
 
 const tabs = [
   { id: 'datasets' as Tab, label: 'Datasets', icon: Database },
@@ -44,6 +46,7 @@ const tabs = [
   { id: 'simulators' as Tab, label: 'Simulators', icon: Cpu },
   { id: 'augmentation' as Tab, label: 'Augmentation', icon: Sparkles },
   { id: 'stats' as Tab, label: 'Statistics', icon: BarChart3 },
+  { id: 'marketplace' as Tab, label: 'Web3 Market', icon: ShoppingCart },
 ];
 
 function App() {
@@ -92,6 +95,8 @@ function App() {
         return <StructuredVQA />;
       case 'stats':
         return <PlatformStats />;
+      case 'marketplace':
+        return <Web3Marketplace />;
       default:
         return <DatasetManager />;
     }

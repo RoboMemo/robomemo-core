@@ -1965,14 +1965,159 @@ app.get('/api/datasets/genrobot/sample/:sampleId', (req, res) => {
     const { sampleId } = req.params;
     const metadataPath = path.join(DATA_DIR, 'genrobot_open_dataset', 'metadata.json');
     const metadata = JSON.parse(fs.readFileSync(metadataPath, 'utf8'));
-    
+
     const sample = metadata.samples.find(s => s.id === sampleId);
     if (!sample) {
       return res.status(404).json({ error: 'Sample not found' });
     }
-    
+
     res.json(sample);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
+
+// ─── Web3 / IPFS Routes ───────────────────────────────────────────────────────
+
+const ipfsService = require('./services/ipfsService');
+const web3Service = require('./services/web3Service');
+
+// Mock IPFS gateway: GET /ipfs/:cid/:filename
+app.get('/ipfs/:cid/:filename', (req, res) => {
+  const { cid, filename } = req.params;
+  const buffer = ipfsService.getFromIPFS(cid, filename);
+  if (!buffer) return res.status(404).json({ error: 'IPFS content not found' });
+
+  const ext = path.extname(filename).toLowerCase();
+  const mimeMap = {
+    '.mp4': 'video/mp4', '.avi': 'video/x-msvideo', '.mov': 'video/quicktime',
+    '.webm': 'video/webm', '.mkv': 'video/x-matroska',
+    '.json': 'application/json', '.jsonl': 'application/json',
+    '.txt': 'text/plain', '.zip': 'application/zip',
+    '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
+  };
+  res.setHeader('Content-Type', mimeMap[ext] || 'application/octet-stream');
+  res.setHeader('Content-Length', buffer.length);
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.send(buffer);
+});
+
+// GET /api/web3/status — blockchain connection status
+app.get('/api/web3/status', async (req, res) => {
+  try {
+    const status = await web3Service.getWeb3Status();
+    res.json(status);
+  } catch (err) {
+    res.status(500).json({ connected: false, error: err.message });
+  }
+});
+
+// GET /api/web3/contracts — contract addresses + ABIs for frontend
+app.get('/api/web3/contracts', (req, res) => {
+  try {
+    const info = web3Service.getContractInfo();
+    res.json(info);
+  } catch (err) {
+    res.status(503).json({ error: err.message });
+  }
+});
+
+// GET /api/web3/listings — all active marketplace listings
+app.get('/api/web3/listings', async (req, res) => {
+  try {
+    const listings = await web3Service.getActiveListings();
+    res.json(listings);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/web3/nft/:tokenId — get NFT metadata
+app.get('/api/web3/nft/:tokenId', async (req, res) => {
+  try {
+    const meta = await web3Service.getNFTMeta(req.params.tokenId);
+    res.json(meta);
+  } catch (err) {
+    res.status(404).json({ error: err.message });
+  }
+});
+
+// POST /api/web3/upload — upload video + SFT to IPFS, then mint NFT
+const web3UploadStorage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    const dir = path.join(__dirname, 'uploads', 'web3_temp');
+    fs.mkdirSync(dir, { recursive: true });
+    cb(null, dir);
+  },
+  filename: (req, file, cb) => {
+    const safe = file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_');
+    cb(null, `${Date.now()}_${safe}`);
+  },
+});
+const web3Upload = multer({
+  storage: web3UploadStorage,
+  limits: { fileSize: 500 * 1024 * 1024 },
+});
+
+app.post(
+  '/api/web3/upload',
+  web3Upload.fields([{ name: 'video', maxCount: 1 }, { name: 'sft', maxCount: 1 }]),
+  async (req, res) => {
+    const { title, robotType, taskName, toAddress } = req.body || {};
+    if (!title || !robotType || !taskName || !toAddress) {
+      return res.status(400).json({ error: 'Missing required fields: title, robotType, taskName, toAddress' });
+    }
+
+    try {
+      // Upload video to IPFS
+      let videoCID = '';
+      if (req.files?.video?.[0]) {
+        const vf = req.files.video[0];
+        const result = await ipfsService.uploadToIPFS(vf.path, vf.originalname);
+        videoCID = result.cid;
+        try { fs.unlinkSync(vf.path); } catch {}
+      }
+
+      // Upload SFT bundle to IPFS
+      let sftCID = '';
+      if (req.files?.sft?.[0]) {
+        const sf = req.files.sft[0];
+        const result = await ipfsService.uploadToIPFS(sf.path, sf.originalname);
+        sftCID = result.cid;
+        try { fs.unlinkSync(sf.path); } catch {}
+      }
+
+      // Upload metadata JSON to IPFS
+      const metaObj = {
+        title, robotType, taskName, videoCID, sftCID,
+        creator: toAddress,
+        createdAt: new Date().toISOString(),
+        platform: 'RoboMemo',
+      };
+      const metaResult = await ipfsService.uploadJSONToIPFS(metaObj, 'metadata.json');
+      const metaCID = metaResult.cid;
+      const tokenURI = `ipfs://${metaCID}/metadata.json`;
+
+      // Mint NFT via backend deployer signer
+      const mintResult = await web3Service.mintDatasetNFT({
+        toAddress, title, robotType, taskName,
+        videoCID, sftCID, metaCID, tokenURI,
+      });
+
+      auditLog.write({
+        event: 'WEB3_MINT',
+        userId: req.user?.userId,
+        action: 'create',
+        resource: `nft:${mintResult.tokenId}`,
+        ip: req.clientIP,
+        details: { title, robotType, taskName, videoCID, sftCID, ...mintResult },
+        result: 'success',
+      });
+
+      res.json({ success: true, videoCID, sftCID, metaCID, tokenURI, ...mintResult });
+    } catch (err) {
+      console.error('[Web3Upload]', err);
+      res.status(500).json({ error: err.message });
+    }
+  }
+);

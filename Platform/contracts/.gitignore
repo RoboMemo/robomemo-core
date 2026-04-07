@@ -1,0 +1,5 @@
+node_modules/
+artifacts/
+cache/
+deployment.json
+._*
