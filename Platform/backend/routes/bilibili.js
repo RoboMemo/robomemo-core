@@ -243,19 +243,34 @@ router.post('/pipeline', async (req, res) => {
     try {
       let targetBvids = bvids || [];
 
-      // Stage 1: 搜索（如果提供了关键词）
+      // Stage 1: 搜索（使用 Hunt API 而不是 Search，避免被封）
       if (keyword && !bvids) {
         jobs[jobId].stage = 'searching';
         jobs[jobId].progress = 5;
         
-        const searchScript = path.join(BILI_SERVICES_DIR, 'bili_intel.py');
-        const searchResult = await callPython(searchScript, ['search', keyword, '--page-size', '50'], 30000);
+        // 使用 Hunt API（更好的请求头，避免被封）
+        const huntScript = path.join(BILI_SERVICES_DIR, 'bili_hunter_agent.py');
+        const huntResult = await callPython(huntScript, [
+          keyword,  // 直接使用关键词作为意图
+          '--min-score', '30',
+          '--max-results', String(maxVideos * 2),
+          '--json',
+        ], 60000);
         
-        if (searchResult.success) {
-          targetBvids = searchResult.videos.slice(0, maxVideos * 2).map(v => v.bvid);
+        if (huntResult.bvids && huntResult.bvids.length > 0) {
+          targetBvids = huntResult.bvids;
           jobs[jobId].results.search = {
-            total: searchResult.total,
+            total: huntResult.total_found || huntResult.bvids.length,
             found: targetBvids.length,
+          };
+        } else {
+          // 如果 Hunt 失败，使用 mock 数据继续演示
+          console.log('[Pipeline] Hunt returned no results, using mock BVIDs for demo');
+          targetBvids = ['BV1WLPGzvEjJ', 'BV11Z4y1671T', 'BV16b421h7tg'];
+          jobs[jobId].results.search = {
+            total: 3,
+            found: 3,
+            mock: true,
           };
         }
       }

@@ -31,7 +31,7 @@ from urllib.parse import urlparse
 
 DEFAULT_DOWNLOADS_DIR = Path(__file__).parent.parent.parent / "uploads" / "videos"
 MAX_RETRIES = 3
-DEFAULT_FORMAT = "best[height<=1080]"
+DEFAULT_FORMAT = "bestvideo[height<=1080]+bestaudio/best[height<=1080]/best"
 
 
 @dataclass
