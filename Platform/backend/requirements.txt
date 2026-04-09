@@ -1,0 +1,19 @@
+# RoboMemo Platform - Python Dependencies
+# =========================================
+# 用于 Bilibili 视频采集、VLM标注、SFT流水线
+
+# 视频下载
+yt-dlp>=2024.1.0
+
+# 视频处理
+opencv-python>=4.8.0
+numpy>=1.24.0
+
+# HTTP 请求
+requests>=2.31.0
+
+# VLM 后端 (可选)
+# google-generativeai>=0.3.0  # Gemini API
+
+# 数据处理
+# pillow>=10.0.0  # 图像处理

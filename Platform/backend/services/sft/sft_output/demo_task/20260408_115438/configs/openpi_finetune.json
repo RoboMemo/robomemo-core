@@ -1,0 +1,112 @@
+{
+  "model": {
+    "name": "pi05",
+    "pretrained_path": "s3://openpi-assets/checkpoints/pi0_base",
+    "vlm_backbone": "paligemma",
+    "freeze_vlm": true,
+    "unfreeze_vlm_after_steps": 10000,
+    "image_size": [
+      224,
+      224
+    ],
+    "num_cameras": 1,
+    "state_dim": 32,
+    "action_dim": 8,
+    "action_horizon": 16,
+    "flow_matching": {
+      "num_flow_steps": 10,
+      "schedule": "linear"
+    }
+  },
+  "lora": {
+    "enabled": true,
+    "rank": 32,
+    "alpha": 64.0,
+    "dropout": 0.05,
+    "target_modules": [
+      "q_proj",
+      "v_proj",
+      "k_proj",
+      "o_proj",
+      "gate_proj",
+      "up_proj",
+      "down_proj"
+    ],
+    "apply_to_vlm": false,
+    "apply_to_action_head": true,
+    "merge_after_training": true
+  },
+  "training": {
+    "learning_rate": 5e-05,
+    "weight_decay": 0.01,
+    "warmup_steps": 1000,
+    "max_steps": 80000,
+    "batch_size": 16,
+    "gradient_accumulation_steps": 4,
+    "lr_scheduler": "cosine",
+    "bf16": true,
+    "flow_loss_weight": 1.0,
+    "vlm_loss_weight": 0.1,
+    "gradient_clip_norm": 1.0,
+    "use_ema": true,
+    "ema_decay": 0.9999,
+    "save_steps": 5000,
+    "eval_steps": 2000,
+    "logging_steps": 100,
+    "num_gpus": 1
+  },
+  "data": {
+    "dataset_path": "sft_output/lerobot",
+    "dataset_format": "lerobot_v2",
+    "task_instruction": "Pick up the screw and drive it into the mounting bracket",
+    "instruction_variants": [
+      "Pick up the screw and drive it into the mounting bracket",
+      "Tighten the screw into the bracket",
+      "Install the screw by driving it clockwise"
+    ],
+    "image_augmentation": true,
+    "state_normalization": "per_feature",
+    "action_normalization": "per_feature",
+    "train_ratio": 0.9,
+    "embodiment_name": "roboforce",
+    "camera_names": [
+      "head_rgb"
+    ],
+    "control_frequency_hz": 50.0
+  },
+  "embodiment": {
+    "name": "roboforce",
+    "modality": {
+      "video": {
+        "cameras": [
+          "head_rgb"
+        ],
+        "resolution": [
+          224,
+          224
+        ],
+        "fps": 50.0
+      },
+      "action": {
+        "type": "delta_ee_pose_and_screw",
+        "components": [
+          "delta_x",
+          "delta_y",
+          "delta_z",
+          "delta_rx",
+          "delta_ry",
+          "delta_rz",
+          "screw_rotation",
+          "gripper"
+        ],
+        "dim": 8
+      }
+    }
+  },
+  "output_dir": "sft_output\\demo_task\\20260408_115438\\checkpoints",
+  "experiment_name": "demo_task_20260408",
+  "wandb": {
+    "enabled": true,
+    "project": "roboforce-openpi"
+  }
+}
