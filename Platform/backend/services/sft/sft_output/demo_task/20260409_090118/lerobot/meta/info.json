@@ -1,0 +1,79 @@
+{
+  "codebase_version": "2.1",
+  "robot_type": "single_arm",
+  "total_episodes": 1,
+  "total_frames": 0,
+  "fps": 30,
+  "total_tasks": 1,
+  "splits": {
+    "train": "0:1"
+  },
+  "data_path": "data/chunk-{chunk_index:03d}/episode_{episode_index:06d}.json",
+  "features": {
+    "observation.task_description": {
+      "dtype": "string",
+      "shape": [
+        1
+      ],
+      "description": "Task instruction for VLA model"
+    },
+    "action_primitive": {
+      "dtype": "string",
+      "shape": [
+        1
+      ],
+      "description": "Action primitive from VLM"
+    },
+    "target_object": {
+      "dtype": "string",
+      "shape": [
+        1
+      ],
+      "description": "Target object"
+    },
+    "gripper_state": {
+      "dtype": "string",
+      "shape": [
+        1
+      ],
+      "description": "Gripper state"
+    },
+    "contact_type": {
+      "dtype": "string",
+      "shape": [
+        1
+      ],
+      "description": "Contact type"
+    },
+    "force_level": {
+      "dtype": "string",
+      "shape": [
+        1
+      ],
+      "description": "Force level"
+    },
+    "motion_direction": {
+      "dtype": "string",
+      "shape": [
+        1
+      ],
+      "description": "Motion direction"
+    },
+    "phase_name": {
+      "dtype": "string",
+      "shape": [
+        1
+      ],
+      "description": "Phase label"
+    },
+    "confidence": {
+      "dtype": "float32",
+      "shape": [
+        1
+      ],
+      "description": "VLM confidence"
+    }
+  },
+  "vlm_backend": "unknown",
+  "created_at": "2026-04-09T09:01:18Z"
+}

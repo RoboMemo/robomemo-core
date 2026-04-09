@@ -13,7 +13,8 @@ import {
   Volume2,
   Bell,
   BrainCircuit,
-  ShoppingCart
+  ShoppingCart,
+  Search
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Sheet, SheetContent, SheetTrigger } from '@/components/ui/sheet';
@@ -31,13 +32,15 @@ import StructuredVQA from '@/sections/StructuredVQA';
 import PlatformStats from '@/sections/PlatformStats';
 import GenRobotDataset from '@/sections/GenRobotDataset';
 import Web3Marketplace from '@/sections/Web3Marketplace';
+import BilibiliHunter from '@/sections/BilibiliHunter';
 import './App.css';
 
-type Tab = 'datasets' | 'collection' | 'annotation' | 'visualization' | 'simulators' | 'augmentation' | 'autoannotation' | 'structuredvqa' | 'stats' | 'genrobot' | 'marketplace';
+type Tab = 'datasets' | 'collection' | 'annotation' | 'visualization' | 'simulators' | 'augmentation' | 'autoannotation' | 'structuredvqa' | 'stats' | 'genrobot' | 'marketplace' | 'biliHunter';
 
 const tabs = [
   { id: 'datasets' as Tab, label: 'Datasets', icon: Database },
   { id: 'genrobot' as Tab, label: 'GenRobot', icon: Database },
+  { id: 'biliHunter' as Tab, label: 'Bilibili Hunter', icon: Search },
   { id: 'collection' as Tab, label: 'Collection', icon: Play },
   { id: 'annotation' as Tab, label: 'Annotation', icon: Tag },
   { id: 'autoannotation' as Tab, label: 'Auto-Annotation', icon: Wand2 },
@@ -97,6 +100,8 @@ function App() {
         return <PlatformStats />;
       case 'marketplace':
         return <Web3Marketplace />;
+      case 'biliHunter':
+        return <BilibiliHunter />;
       default:
         return <DatasetManager />;
     }
