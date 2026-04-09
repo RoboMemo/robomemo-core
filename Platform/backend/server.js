@@ -23,6 +23,9 @@ const exportService = require('./services/export');
 const app = express();
 const port = process.env.PORT || 3001;
 
+// Import Bilibili routes
+const biliRoutes = require('./routes/bilibili');
+
 // ─── Security Middleware ──────────────────────────────────────────────────────
 // Helmet: security headers (CSP, HSTS, X-Frame-Options, etc.)
 app.use(helmet({ contentSecurityPolicy: false })); // CSP off for SPA
@@ -50,13 +53,18 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage });
 
-// Data management — SQLite via db.js
+// Data management — SQLite via db.js (async initialization)
 const DATA_DIR = path.join(__dirname, 'data'); // kept for GenRobot static files
-const { db, Datasets, Episodes, Annotations, Collections, Lineage, syncFromJSON, getStats, getFullStats, getDatasetStats, getAnnotationStats, getTimeline } = require('./db');
+const dbModule = require('./db');
+let Datasets, Episodes, Annotations, Collections, Lineage, syncFromJSON, getStats, getFullStats, getDatasetStats, getAnnotationStats, getTimeline;
 
-// Initialize auth & audit on the shared DB instance
-initAuth(db);
-auditLog.initAuditLog(db);
+// Initialize auth & audit on the shared DB instance (will be called after db init)
+async function initDb() {
+  await dbModule.initDatabase();
+  ({ Datasets, Episodes, Annotations, Collections, Lineage, syncFromJSON, getStats, getFullStats, getDatasetStats, getAnnotationStats, getTimeline } = dbModule);
+  initAuth(dbModule);
+  auditLog.initAuditLog(dbModule);
+}
 
 // Serve uploaded videos as static (for browser preview)
 app.use('/uploads/videos', express.static(path.join(__dirname, 'uploads', 'videos')));
@@ -309,6 +317,8 @@ app.post('/api/vlm/local/summarize', async (req, res) => {
 });
 
 // Routes
+app.use('/api/bilibili', biliRoutes);  // Bilibili search/download/pipeline routes
+
 app.get('/api/datasets', (req, res) => {
   res.json(Datasets.getAll());
 });
@@ -1939,9 +1949,10 @@ app.post('/api/autoannotation/compare', async (req, res) => {
   });
 });
 
-app.listen(port, () => {
+app.listen(port, async () => {
+  await initDb();
   console.log(`Backend server running at http://localhost:${port}`);
-  console.log('[DB] SQLite ready —', require('./db').getStats());
+  console.log('[DB] SQLite ready —', getStats());
 });
 
 // GenRobot Dataset API

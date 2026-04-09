@@ -7,6 +7,8 @@
  *   - 读取 web3-deployment.json 获取合约地址和 ABI
  *   - 提供 mintNFT / listForSale / buyItem / getListings 等操作
  *   - 后端使用 deployer 账户签名（仅限 mint），其余操作由前端钱包签名
+ * 
+ * 注意：当 Hardhat 节点未运行时，服务会优雅降级
  */
 
 const { ethers } = require("ethers");
@@ -20,6 +22,36 @@ const RPC_URL = process.env.WEB3_RPC_URL || "http://127.0.0.1:8545";
 
 let _provider = null;
 let _deployment = null;
+let _connectionChecked = false;
+let _isConnected = false;
+
+/**
+ * 检查 Web3 连接是否可用
+ * 仅在首次调用时检查，避免重复日志
+ */
+async function checkConnection() {
+  if (_connectionChecked) return _isConnected;
+  _connectionChecked = true;
+  
+  try {
+    const provider = new ethers.JsonRpcProvider(RPC_URL);
+    // 设置较短超时
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 3000);
+    
+    await provider.getBlockNumber();
+    clearTimeout(timeoutId);
+    
+    _provider = provider;
+    _isConnected = true;
+    console.log('[Web3] Connected to', RPC_URL);
+    return true;
+  } catch (err) {
+    console.log('[Web3] Not available - Web3 features disabled. Run Hardhat node to enable.');
+    _isConnected = false;
+    return false;
+  }
+}
 
 function getProvider() {
   if (!_provider) {
@@ -31,9 +63,7 @@ function getProvider() {
 function getDeployment() {
   if (!_deployment) {
     if (!fs.existsSync(DEPLOYMENT_PATH)) {
-      throw new Error(
-        "web3-deployment.json not found. Run: cd contracts && npx hardhat run scripts/deploy.js --network localhost"
-      );
+      return null; // 返回 null 而不是抛出错误
     }
     _deployment = JSON.parse(fs.readFileSync(DEPLOYMENT_PATH, "utf-8"));
   }
@@ -42,6 +72,7 @@ function getDeployment() {
 
 function getNFTContract(signerOrProvider) {
   const dep = getDeployment();
+  if (!dep) return null;
   return new ethers.Contract(
     dep.contracts.RoboDataNFT.address,
     dep.contracts.RoboDataNFT.abi,
@@ -51,6 +82,7 @@ function getNFTContract(signerOrProvider) {
 
 function getMarketContract(signerOrProvider) {
   const dep = getDeployment();
+  if (!dep) return null;
   return new ethers.Contract(
     dep.contracts.RoboDataMarketplace.address,
     dep.contracts.RoboDataMarketplace.abi,
@@ -63,6 +95,10 @@ function getMarketContract(signerOrProvider) {
  * 在本地 Hardhat 中使用账户 #0
  */
 async function getDeployerSigner() {
+  if (!_isConnected) {
+    throw new Error("Web3 not connected. Please start Hardhat node.");
+  }
+  
   const privateKey = process.env.DEPLOYER_PRIVATE_KEY;
   if (privateKey) {
     return new ethers.Wallet(privateKey, getProvider());
@@ -80,8 +116,13 @@ async function getDeployerSigner() {
  * 后端代理铸造 NFT（由 deployer 签名，mint 给指定地址）
  */
 async function mintDatasetNFT({ toAddress, title, robotType, taskName, videoCID, sftCID, metaCID, tokenURI }) {
+  if (!_isConnected) {
+    throw new Error("Web3 not connected. Please start Hardhat node.");
+  }
+  
   const signer = await getDeployerSigner();
   const nft = getNFTContract(signer);
+  if (!nft) throw new Error("NFT contract not deployed");
 
   const tx = await nft.mintDataset(
     toAddress,
@@ -110,7 +151,13 @@ async function mintDatasetNFT({ toAddress, title, robotType, taskName, videoCID,
  * 获取 NFT 元数据
  */
 async function getNFTMeta(tokenId) {
+  if (!_isConnected) {
+    return null;
+  }
+  
   const nft = getNFTContract();
+  if (!nft) return null;
+  
   const meta = await nft.getDatasetMeta(tokenId);
   const owner = await nft.ownerOf(tokenId);
   const uri = await nft.tokenURI(tokenId);
@@ -133,7 +180,13 @@ async function getNFTMeta(tokenId) {
  * 获取某地址持有的所有 tokenId
  */
 async function getOwnedTokens(address) {
+  if (!_isConnected) {
+    return [];
+  }
+  
   const nft = getNFTContract();
+  if (!nft) return [];
+  
   const total = await nft.totalSupply();
   const owned = [];
   for (let i = 1; i <= Number(total); i++) {
@@ -155,8 +208,14 @@ async function getOwnedTokens(address) {
  * 获取所有活跃上架列表
  */
 async function getActiveListings() {
+  if (!_isConnected) {
+    return [];
+  }
+  
   const market = getMarketContract();
   const nft = getNFTContract();
+  if (!market || !nft) return [];
+  
   const listings = await market.getActiveListings();
 
   // 附加 NFT 元数据
@@ -191,7 +250,14 @@ async function getActiveListings() {
  */
 function getContractInfo() {
   const dep = getDeployment();
+  if (!dep) {
+    return {
+      available: false,
+      message: "Web3 contracts not deployed. Run: cd contracts && npx hardhat run scripts/deploy.js --network localhost"
+    };
+  }
   return {
+    available: true,
     network: dep.network,
     chainId: dep.chainId,
     rpcUrl: RPC_URL,
@@ -212,6 +278,15 @@ function getContractInfo() {
  * 检查 Web3 连接状态
  */
 async function getWeb3Status() {
+  const connected = await checkConnection();
+  
+  if (!connected) {
+    return { 
+      connected: false, 
+      message: "Hardhat node not running. Web3 features disabled." 
+    };
+  }
+  
   try {
     const provider = getProvider();
     const blockNumber = await provider.getBlockNumber();
@@ -222,10 +297,10 @@ async function getWeb3Status() {
       blockNumber,
       chainId: network.chainId.toString(),
       rpcUrl: RPC_URL,
-      contracts: {
+      contracts: dep ? {
         nft: dep.contracts.RoboDataNFT.address,
         marketplace: dep.contracts.RoboDataMarketplace.address,
-      },
+      } : null,
     };
   } catch (err) {
     return { connected: false, error: err.message };
@@ -233,6 +308,7 @@ async function getWeb3Status() {
 }
 
 module.exports = {
+  checkConnection,
   getProvider,
   getNFTContract,
   getMarketContract,
