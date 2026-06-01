@@ -1,0 +1,23 @@
+orbbec_camera_node:
+  ros__parameters:
+    # Color stream
+    color_width: 640
+    color_height: 480
+    color_fps: 30
+
+    # Depth stream
+    depth_width: 640
+    depth_height: 480
+    depth_fps: 30
+
+    # Alignment: "HW" (hardware D2C), "SW" (software D2C), "NONE"
+    align_mode: "HW"
+
+    # Point cloud
+    enable_point_cloud: true
+
+    # TF
+    publish_tf: true
+    camera_frame_id: "camera_link"
+    color_optical_frame: "camera_color_optical_frame"
+    depth_optical_frame: "camera_depth_optical_frame"

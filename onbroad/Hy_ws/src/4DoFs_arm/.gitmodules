@@ -1,0 +1,8 @@
+[submodule "submodules/OrbbecSDK"]
+	path = submodules/OrbbecSDK
+	url = https://github.com/orbbec/OrbbecSDK.git
+	branch = main
+[submodule "submodules/roarm_ws_em0"]
+	path = submodules/roarm_ws_em0
+	url = https://github.com/DUDULRX/roarm_ws_em0.git
+	branch = main

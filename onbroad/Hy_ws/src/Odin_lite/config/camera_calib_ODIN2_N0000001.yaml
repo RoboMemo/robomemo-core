@@ -1,0 +1,18 @@
+%YAML:1.0
+#########################################BAG TOPIC SETTING#########################################
+imu_topic: "/odin/imu" #imu topic
+image0_topic: "/odin/image/compressed"   #image topic
+lidar_topic: "/odin/cloud_raw"
+
+body_T_lidar: !!opencv-matrix
+   rows: 4
+   cols: 4
+   dt: d
+   data: [ 0.9999543679,-0.0086157257,0.0041269153,-0.0305398721,                      
+           0.0086800624,0.9998369581,-0.0158339418,0.0234679052,                        
+           -0.0039898215,0.0158690412,0.9998661185,0.0333162287,                        
+           0.0000000000,0.0000000000,0.0000000000,1.0000000000]
+
+MASK_NAME: "mask/o2s_mask.png"
+
+

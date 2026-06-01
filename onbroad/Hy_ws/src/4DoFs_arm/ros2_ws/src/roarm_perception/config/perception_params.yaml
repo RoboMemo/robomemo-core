@@ -1,0 +1,20 @@
+perception_node:
+  ros__parameters:
+    input_cloud_topic: "/camera/depth_registered/points"
+    target_frame: "base_link"
+
+    # Voxel downsampling
+    voxel_leaf_size: 0.005       # 5 mm
+
+    # PassThrough filter on Z (distance from camera, meters)
+    passthrough_z_min: 0.05
+    passthrough_z_max: 1.20
+
+    # RANSAC plane segmentation
+    sac_distance_threshold: 0.010   # 10 mm inlier tolerance
+    sac_max_iterations: 1000
+
+    # Euclidean cluster extraction
+    ec_cluster_tolerance: 0.020     # 20 mm gap between clusters
+    ec_min_cluster_size: 100
+    ec_max_cluster_size: 25000

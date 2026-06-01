@@ -1,0 +1,18 @@
+scene_manager_node:
+  ros__parameters:
+    # Table collision box (in base_link frame)
+    table_x: 0.25
+    table_y: 0.00
+    table_z: -0.005          # bottom face of table just below base_link plane
+    table_size_x: 0.60
+    table_size_y: 0.80
+    table_size_z: 0.01       # thin slab
+
+    # Wall behind arm (prevents camera stand collision)
+    add_back_wall: true
+    wall_x: -0.40
+    wall_y: 0.00
+    wall_z: 0.20
+    wall_size_x: 0.02
+    wall_size_y: 1.00
+    wall_size_z: 0.60
