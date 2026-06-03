@@ -47,6 +47,6 @@ def main(args=None):
     try:
         rclpy.spin(app)
     except KeyboardInterrupt:
-        pass
+        app._App__logger.info("KeyboardInterrupt received, shutting down app.")
 
     app.shutdown()
