@@ -1,0 +1,24 @@
+pick_place_node:
+  ros__parameters:
+    # Pre-grasp approach height above object (meters)
+    approach_offset_z: 0.08
+    # Retreat height after grasp (meters)
+    retreat_offset_z: 0.10
+    # Home position (safe rest position in base_link frame)
+    home_x: 0.18
+    home_y: 0.00
+    home_z: 0.15
+    # Gripper positions (radians)
+    gripper_open_rad: 1.5
+    gripper_close_rad: 0.2
+    # Hardware settle time after gripper command (seconds)
+    gripper_settle_s: 1.0
+    # Services and topics
+    move_point_service: "move_point_cmd"
+    gripper_topic: "gripper_cmd"
+    detection_topic: "/perception/detected_objects"
+    # MoveIt
+    planning_group: "hand"
+    cartesian_step: 0.010       # 1 cm Cartesian path step
+    cartesian_jump_threshold: 0.0
+    cartesian_min_fraction: 0.90

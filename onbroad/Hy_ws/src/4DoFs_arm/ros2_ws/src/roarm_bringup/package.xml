@@ -1,0 +1,32 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>roarm_bringup</name>
+  <version>0.1.0</version>
+  <description>Top-level bringup, URDF overlay, and orchestration for the RoArm vision pipeline.</description>
+  <maintainer email="user@example.com">user</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <exec_depend>roarm_description</exec_depend>
+  <exec_depend>roarm_moveit</exec_depend>
+  <exec_depend>roarm_moveit_cmd</exec_depend>
+  <exec_depend>roarm_driver</exec_depend>
+  <exec_depend>orbbec_ros2</exec_depend>
+  <exec_depend>roarm_perception</exec_depend>
+  <exec_depend>roarm_pick_place</exec_depend>
+  <exec_depend>roarm_scene</exec_depend>
+  <exec_depend>moveit_ros_move_group</exec_depend>
+  <exec_depend>robot_state_publisher</exec_depend>
+  <exec_depend>ros2_control</exec_depend>
+  <exec_depend>controller_manager</exec_depend>
+  <exec_depend>joint_trajectory_controller</exec_depend>
+  <exec_depend>gripper_controllers</exec_depend>
+  <exec_depend>joint_state_broadcaster</exec_depend>
+  <exec_depend>rviz2</exec_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

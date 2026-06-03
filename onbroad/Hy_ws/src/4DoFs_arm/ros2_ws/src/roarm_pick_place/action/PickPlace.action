@@ -1,0 +1,12 @@
+geometry_msgs/Pose target_pose
+float32 place_x
+float32 place_y
+float32 place_z
+float32 gripper_open_rad
+float32 gripper_close_rad
+---
+bool success
+string message
+---
+string current_state
+float32 progress_percent

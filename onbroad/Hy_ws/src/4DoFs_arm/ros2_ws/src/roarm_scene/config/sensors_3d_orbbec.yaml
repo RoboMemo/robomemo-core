@@ -1,0 +1,15 @@
+# Orbbec point cloud → MoveIt OctoMap
+# Used by MoveItConfigsBuilder.sensors_3d() in roarm_bringup
+sensors:
+  - orbbec_depth_cloud
+
+orbbec_depth_cloud:
+  sensor_plugin: occupancy_map_monitor/PointCloudOctomapUpdater
+  point_cloud_topic: /camera/depth_registered/points
+  max_range: 1.20
+  min_range: 0.10
+  padding_offset: 0.01
+  padding_scale: 1.0
+  max_update_rate: 5.0
+  filtered_cloud_topic: /scene/octomap_filtered_cloud
+  point_subsample: 2

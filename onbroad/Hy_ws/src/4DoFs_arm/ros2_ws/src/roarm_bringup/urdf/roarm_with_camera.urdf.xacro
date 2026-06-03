@@ -1,0 +1,104 @@
+<?xml version="1.0"?>
+<!-- roarm_with_camera.urdf.xacro
+     Wraps the stock roarm URDF and injects camera links.
+     Does NOT modify the roarm_ws_em0 submodule.
+
+     Launch args:
+       camera_mode          eye_to_hand (default) | eye_in_hand
+       initial_positions_file  passed through to ros2_control xacro
+-->
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="roarm_description">
+
+  <xacro:arg name="initial_positions_file" default="initial_positions.yaml"/>
+  <xacro:arg name="camera_mode"            default="eye_to_hand"/>
+
+  <!-- ── Original URDF from submodule (read-only) ─────────────────────── -->
+  <xacro:include filename="$(find roarm_description)/urdf/roarm_description.urdf"/>
+
+  <!-- ── ros2_control hardware interface from roarm_moveit ─────────────── -->
+  <xacro:include
+    filename="$(find roarm_moveit)/config/roarm_description.ros2_control.xacro"/>
+  <xacro:roarm_description_ros2_control
+    name="FakeSystem"
+    initial_positions_file="$(arg initial_positions_file)"/>
+
+  <!-- ================================================================
+       EYE-TO-HAND: camera on a fixed stand, parent = base_link
+       Camera points roughly toward the arm workspace.
+       Update the origin after physical measurement / calibration.
+       ================================================================ -->
+  <xacro:if value="${'$(arg camera_mode)' == 'eye_to_hand'}">
+    <link name="camera_stand_link"/>
+    <joint name="base_to_camera_stand" type="fixed">
+      <parent link="base_link"/>
+      <child  link="camera_stand_link"/>
+      <!-- 35 cm behind base, 40 cm high, tilted ~40° downward toward workspace -->
+      <origin xyz="-0.35 0.0 0.40" rpy="0.0 0.698 0.0"/>
+    </joint>
+
+    <link name="camera_link">
+      <visual>
+        <geometry><box size="0.045 0.025 0.025"/></geometry>
+        <material name="dark_grey"><color rgba="0.2 0.2 0.2 1"/></material>
+      </visual>
+      <collision>
+        <geometry><box size="0.045 0.025 0.025"/></geometry>
+      </collision>
+      <inertial>
+        <mass value="0.085"/>
+        <inertia ixx="1e-5" ixy="0" ixz="0" iyy="1e-5" iyz="0" izz="1e-5"/>
+      </inertial>
+    </link>
+    <joint name="camera_stand_to_camera" type="fixed">
+      <parent link="camera_stand_link"/>
+      <child  link="camera_link"/>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+    </joint>
+  </xacro:if>
+
+  <!-- ================================================================
+       EYE-IN-HAND: camera mounted on link3 near the gripper.
+       Update the origin after measuring the physical bracket offset.
+       ================================================================ -->
+  <xacro:unless value="${'$(arg camera_mode)' == 'eye_to_hand'}">
+    <link name="camera_link">
+      <visual>
+        <geometry><box size="0.045 0.025 0.025"/></geometry>
+        <material name="dark_grey"><color rgba="0.2 0.2 0.2 1"/></material>
+      </visual>
+      <collision>
+        <geometry><box size="0.045 0.025 0.025"/></geometry>
+      </collision>
+      <inertial>
+        <mass value="0.085"/>
+        <inertia ixx="1e-5" ixy="0" ixz="0" iyy="1e-5" iyz="0" izz="1e-5"/>
+      </inertial>
+    </link>
+    <joint name="link3_to_camera" type="fixed">
+      <parent link="link3"/>
+      <child  link="camera_link"/>
+      <!-- Approximate bracket offset — update after calibration -->
+      <origin xyz="0.02 -0.18 0.03" rpy="-1.5708 0.0 -1.5708"/>
+    </joint>
+  </xacro:unless>
+
+  <!-- ================================================================
+       Camera optical frames — always present regardless of mount mode.
+       ROS convention: Z forward, X right, Y down.
+       ================================================================ -->
+  <link name="camera_color_optical_frame"/>
+  <joint name="camera_to_color_optical" type="fixed">
+    <parent link="camera_link"/>
+    <child  link="camera_color_optical_frame"/>
+    <origin xyz="0 0 0" rpy="-1.5708 0.0 -1.5708"/>
+  </joint>
+
+  <link name="camera_depth_optical_frame"/>
+  <joint name="camera_to_depth_optical" type="fixed">
+    <parent link="camera_link"/>
+    <child  link="camera_depth_optical_frame"/>
+    <!-- Small depth-to-color offset; updated by orbbec_camera_node TF via SDK extrinsics -->
+    <origin xyz="0.015 0.0 0.0" rpy="-1.5708 0.0 -1.5708"/>
+  </joint>
+
+</robot>
