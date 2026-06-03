@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import {
   Database,
   Play,
@@ -8,12 +8,12 @@ import {
   Sparkles,
   Settings,
   Menu,
-  Wand2,
   Sun,
   Volume2,
   Bell,
   BrainCircuit,
-  ShoppingCart
+  ShoppingCart,
+  GitBranch
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Sheet, SheetContent, SheetTrigger } from '@/components/ui/sheet';
@@ -22,44 +22,52 @@ import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import DatasetManager from '@/sections/DatasetManager';
 import DataCollection from '@/sections/DataCollection';
-import DataAnnotation from '@/sections/DataAnnotation';
 import DataVisualization from '@/sections/DataVisualization';
 import SimulatorControl from '@/sections/SimulatorControl';
 import DataAugmentation from '@/sections/DataAugmentation';
-import AutoAnnotation from '@/sections/AutoAnnotation';
-import StructuredVQA from '@/sections/StructuredVQA';
+import AnnotationWorkbench from '@/sections/AnnotationWorkbench';
+import TrainingManager from '@/sections/TrainingManager';
 import PlatformStats from '@/sections/PlatformStats';
-import GenRobotDataset from '@/sections/GenRobotDataset';
 import Web3Marketplace from '@/sections/Web3Marketplace';
+import DataPipeline from '@/sections/DataPipeline';
 import './App.css';
 
-type Tab = 'datasets' | 'collection' | 'annotation' | 'visualization' | 'simulators' | 'augmentation' | 'autoannotation' | 'structuredvqa' | 'stats' | 'genrobot' | 'marketplace';
+type Tab = 'pipeline' | 'datasets' | 'collection' | 'annotation' | 'visualization' | 'simulators' | 'augmentation' | 'training' | 'stats' | 'marketplace';
 
 const tabs = [
-  { id: 'datasets' as Tab, label: 'Datasets', icon: Database },
-  { id: 'genrobot' as Tab, label: 'GenRobot', icon: Database },
-  { id: 'collection' as Tab, label: 'Collection', icon: Play },
-  { id: 'annotation' as Tab, label: 'Annotation', icon: Tag },
-  { id: 'autoannotation' as Tab, label: 'Auto-Annotation', icon: Wand2 },
-  { id: 'structuredvqa' as Tab, label: 'Structured VQA', icon: BrainCircuit },
-  { id: 'visualization' as Tab, label: 'Visualization', icon: BarChart3 },
-  { id: 'simulators' as Tab, label: 'Simulators', icon: Cpu },
-  { id: 'augmentation' as Tab, label: 'Augmentation', icon: Sparkles },
-  { id: 'stats' as Tab, label: 'Statistics', icon: BarChart3 },
-  { id: 'marketplace' as Tab, label: 'Web3 Market', icon: ShoppingCart },
+  { id: 'pipeline' as Tab,      label: '数据流水线', icon: GitBranch },
+  { id: 'datasets' as Tab,      label: '数据集',     icon: Database },
+  { id: 'collection' as Tab,    label: '数据采集',   icon: Play },
+  { id: 'annotation' as Tab,    label: '标注工作台', icon: Tag },
+  { id: 'visualization' as Tab, label: '可视化',     icon: BarChart3 },
+  { id: 'simulators' as Tab,    label: '模拟器',     icon: Cpu },
+  { id: 'augmentation' as Tab,  label: '数据增强',   icon: Sparkles },
+  { id: 'training' as Tab,      label: '训练管理',   icon: BrainCircuit },
+  { id: 'stats' as Tab,         label: '统计',       icon: BarChart3 },
+  { id: 'marketplace' as Tab,   label: 'Web3 市场',  icon: ShoppingCart },
 ];
 
 function App() {
-  const [activeTab, setActiveTab] = useState<Tab>('datasets');
+  const [activeTab, setActiveTab] = useState<Tab>('pipeline');
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+
+  // Allow DataPipeline to navigate to marketplace via custom event
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail as Tab;
+      if (detail) setActiveTab(detail);
+    };
+    window.addEventListener('navigate', handler);
+    return () => window.removeEventListener('navigate', handler);
+  }, []);
   const [settings, setSettings] = useState({
     darkMode: false,
     soundEnabled: true,
     notifications: true,
     autoSave: true,
     maxFileSize: 1024,
-    apiEndpoint: 'http://localhost:8000'
+    apiEndpoint: 'http://localhost:3001'
   });
 
   const handleSettingChange = (key: string, value: any) => {
@@ -75,30 +83,28 @@ function App() {
 
   const renderContent = () => {
     switch (activeTab) {
+      case 'pipeline':
+        return <DataPipeline />;
       case 'datasets':
         return <DatasetManager />;
-      case 'genrobot':
-        return <GenRobotDataset />;
       case 'collection':
         return <DataCollection />;
       case 'annotation':
-        return <DataAnnotation />;
+        return <AnnotationWorkbench />;
       case 'visualization':
         return <DataVisualization />;
       case 'simulators':
         return <SimulatorControl />;
       case 'augmentation':
         return <DataAugmentation />;
-      case 'autoannotation':
-        return <AutoAnnotation />;
-      case 'structuredvqa':
-        return <StructuredVQA />;
+      case 'training':
+        return <TrainingManager />;
       case 'stats':
         return <PlatformStats />;
       case 'marketplace':
         return <Web3Marketplace />;
       default:
-        return <DatasetManager />;
+        return <DataPipeline />;
     }
   };
 
@@ -178,13 +184,32 @@ function App() {
                 </div>
 
                 <div className="border-t pt-4">
-                  <Label className="text-sm font-medium block mb-2">API Endpoint</Label>
-                  <input 
-                    type="text" 
+                  <Label className="text-sm font-medium block mb-1">后端服务器地址</Label>
+                  <p className="text-xs text-muted-foreground mb-2">
+                    连接到 Mac Mini 上运行的 RoboMemoClaw 后端。<br />
+                    公网：<span className="font-mono">https://destitute-navigate-street.ngrok-free.dev</span><br />
+                    本地：<span className="font-mono">http://localhost:3001</span>
+                  </p>
+                  <input
+                    type="text"
                     value={settings.apiEndpoint}
                     onChange={(e) => handleSettingChange('apiEndpoint', e.target.value)}
-                    className="w-full px-3 py-2 border border-input rounded-md text-sm"
+                    className="w-full px-3 py-2 border border-input rounded-md text-sm font-mono"
                   />
+                  <div className="flex gap-2 mt-2">
+                    <button
+                      onClick={() => handleSettingChange('apiEndpoint', 'http://localhost:3001')}
+                      className="text-xs px-2 py-1 rounded border border-input hover:bg-accent"
+                    >
+                      本地
+                    </button>
+                    <button
+                      onClick={() => handleSettingChange('apiEndpoint', 'https://destitute-navigate-street.ngrok-free.dev')}
+                      className="text-xs px-2 py-1 rounded border border-input hover:bg-accent"
+                    >
+                      公网 ngrok
+                    </button>
+                  </div>
                 </div>
 
                 <div className="flex items-center justify-between">

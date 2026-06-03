@@ -19,6 +19,7 @@ const { geoFenceMiddleware } = require('./middleware/geo-fence');
 const { vlmLimiter, authLimiter, exportLimiter } = require('./middleware/rate-limiter');
 const { validateTemporalConsistency } = require('./middleware/temporal-consistency');
 const exportService = require('./services/export');
+const gcpService = require('./services/gcpService');
 
 const app = express();
 const port = process.env.PORT || 3001;
@@ -69,7 +70,12 @@ app.use(auditLog.auditMiddleware);
 
 // Health check (no auth required)
 app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString(), encryption: encryption.isEnabled() });
+  res.json({
+    status: 'ok',
+    timestamp: new Date().toISOString(),
+    encryption: encryption.isEnabled(),
+    gcp: gcpService.getBucketInfo()
+  });
 });
 
 // ========== VIDEO UPLOAD ENDPOINT ==========
@@ -105,7 +111,7 @@ const videoUpload = multer({
   },
 });
 
-app.post('/api/upload/video', videoUpload.single('video'), (req, res) => {
+app.post('/api/upload/video', videoUpload.single('video'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No video file provided' });
 
   auditLog.write({
@@ -123,6 +129,18 @@ app.post('/api/upload/video', videoUpload.single('video'), (req, res) => {
     result: 'success',
   });
 
+  // Optional: Upload to GCP Cloud Storage if enabled
+  let gcpUrl = null;
+  if (gcpService.enabled) {
+    try {
+      const gcpPath = `videos/${req.file.filename}`;
+      gcpUrl = await gcpService.uploadFile(req.file.path, gcpPath);
+      console.log(`[GCP] Video uploaded: ${gcpUrl}`);
+    } catch (error) {
+      console.error('[GCP] Upload failed, falling back to local storage:', error.message);
+    }
+  }
+
   res.json({
     success: true,
     filename: req.file.filename,
@@ -130,6 +148,7 @@ app.post('/api/upload/video', videoUpload.single('video'), (req, res) => {
     serverPath: req.file.path,
     size: req.file.size,
     url: `/uploads/videos/${req.file.filename}`,
+    gcpUrl: gcpUrl || undefined,
   });
 });
 
@@ -1939,10 +1958,348 @@ app.post('/api/autoannotation/compare', async (req, res) => {
   });
 });
 
+// ========== GCP CLOUD STORAGE API ==========
+
+/**
+ * Get GCP storage status
+ * GET /api/gcp/status
+ */
+app.get('/api/gcp/status', authMiddleware, (req, res) => {
+  res.json(gcpService.getBucketInfo());
+});
+
+/**
+ * List files in GCP bucket
+ * GET /api/gcp/files?prefix=videos/
+ */
+app.get('/api/gcp/files', authMiddleware, async (req, res) => {
+  if (!gcpService.enabled) {
+    return res.status(503).json({ error: 'GCP Storage is not enabled' });
+  }
+
+  try {
+    const prefix = req.query.prefix || '';
+    const files = await gcpService.listFiles(prefix);
+    res.json({ files });
+  } catch (error) {
+    console.error('[GCP] List files error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * Generate signed URL for private file access
+ * POST /api/gcp/signed-url
+ * Body: { filePath: 'videos/example.mp4', expiresInMinutes: 60 }
+ */
+app.post('/api/gcp/signed-url', authMiddleware, async (req, res) => {
+  if (!gcpService.enabled) {
+    return res.status(503).json({ error: 'GCP Storage is not enabled' });
+  }
+
+  const { filePath, expiresInMinutes = 60 } = req.body;
+  if (!filePath) {
+    return res.status(400).json({ error: 'filePath is required' });
+  }
+
+  try {
+    const url = await gcpService.getSignedUrl(filePath, expiresInMinutes);
+    res.json({ url, expiresInMinutes });
+  } catch (error) {
+    console.error('[GCP] Signed URL error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 app.listen(port, () => {
   console.log(`Backend server running at http://localhost:${port}`);
   console.log('[DB] SQLite ready —', require('./db').getStats());
 });
+
+// ========== RYNN VLA PIPELINE API ==========
+
+/**
+ * POST /api/pipeline/filter
+ * Body: { videos: [{ bvid, videoPath, title }] }
+ * Runs perspective filter (face + wrist detection) on each video.
+ */
+app.post('/api/pipeline/filter', async (req, res) => {
+  const { videos } = req.body;
+  if (!Array.isArray(videos) || videos.length === 0) {
+    return res.status(400).json({ error: 'videos array required' });
+  }
+
+  const results = await Promise.all(videos.map(async (v) => {
+    const { bvid, videoPath, title } = v;
+
+    if (!videoPath || !fs.existsSync(videoPath)) {
+      return {
+        bvid, title, videoPath,
+        decision: 'error',
+        reject_reason: `视频文件不存在: ${videoPath}`,
+        total_frames: 0, face_frames: 0, wrist_frames: 0, pass_rate: 0,
+      };
+    }
+
+    return new Promise((resolve) => {
+      const py = spawn('python', [
+        path.join(__dirname, 'pipeline_filter.py'),
+        videoPath,
+        '5',  // sample every 5 frames
+      ]);
+      let out = '';
+      let err = '';
+      py.stdout.on('data', (d) => { out += d.toString(); });
+      py.stderr.on('data', (d) => { err += d.toString(); });
+      py.on('close', () => {
+        try {
+          const parsed = JSON.parse(out.trim());
+          resolve({ bvid, title, ...parsed });
+        } catch {
+          resolve({
+            bvid, title, videoPath,
+            decision: 'error',
+            reject_reason: `过滤器运行失败: ${err || out}`,
+            total_frames: 0, face_frames: 0, wrist_frames: 0, pass_rate: 0,
+          });
+        }
+      });
+    });
+  }));
+
+  const passed = results.filter(r => r.decision === 'pass').length;
+  const rejected = results.filter(r => r.decision === 'reject').length;
+
+  res.json({ results, summary: { total: videos.length, passed, rejected } });
+});
+
+/**
+ * POST /api/pipeline/autolabel
+ * Body: { videos: [{ bvid, videoPath, title }], provider, apiKey, numFrames }
+ * Runs VLM analysis + extracts action primitives / contact mechanics / task summary.
+ */
+app.post('/api/pipeline/autolabel', vlmLimiter, async (req, res) => {
+  const { videos, provider = 'gemini', apiKey: clientApiKey, numFrames = 32, model } = req.body;
+
+  if (!Array.isArray(videos) || videos.length === 0) {
+    return res.status(400).json({ error: 'videos array required' });
+  }
+
+  const envKeyMap = { gemini: 'GEMINI_API_KEY', claude: 'CLAUDE_API_KEY', openai: 'OPENAI_API_KEY' };
+  const apiKey = process.env[envKeyMap[provider]] || clientApiKey;
+  if (!apiKey && provider !== 'local') {
+    return res.status(400).json({ error: 'API key not configured.' });
+  }
+
+  const results = await Promise.all(videos.map(async (v) => {
+    const { bvid, videoPath, title } = v;
+
+    if (!videoPath || !fs.existsSync(videoPath)) {
+      return { bvid, title, error: `视频文件不存在: ${videoPath}` };
+    }
+
+    return new Promise((resolve) => {
+      const pythonScript = path.join(__dirname, 'vlm_video_analyzer.py');
+      const args = [provider, apiKey || 'local', videoPath, String(numFrames)];
+      if (model) args.push(model);
+
+      const py = spawn('python', [pythonScript, ...args]);
+      let out = '';
+      let err = '';
+      py.stdout.on('data', (d) => { out += d.toString(); });
+      py.stderr.on('data', (d) => { err += d.toString(); });
+      py.on('close', () => {
+        try {
+          const analysis = JSON.parse(out.trim());
+          if (analysis.error) {
+            resolve({ bvid, title, error: analysis.error });
+            return;
+          }
+          // Extract action primitives from temporal sequence
+          const actionPrimitives = extractActionPrimitives(analysis);
+          // Extract contact mechanics
+          const contactMechanics = extractContactMechanics(analysis);
+          // Extract task summary
+          const taskSummary = analysis.summary?.task_description || '';
+          const trainingNote = analysis.summary?.training_data_assessment || '';
+
+          resolve({
+            bvid, title,
+            domain: analysis.domain || 'unknown',
+            subject: analysis.subject || '',
+            actionPrimitives,
+            contactMechanics,
+            taskSummary,
+            trainingNote,
+            analysis,  // full structured analysis
+          });
+        } catch {
+          resolve({ bvid, title, error: `JSON 解析失败: ${err || out.slice(0, 300)}` });
+        }
+      });
+    });
+  }));
+
+  res.json({ results });
+});
+
+/**
+ * POST /api/pipeline/export/lerobot-v2
+ * Body: { annotations: [...], outputName }
+ * Returns a LeRobot V2 compatible JSONL dataset bundle.
+ */
+app.post('/api/pipeline/export/lerobot-v2', (req, res) => {
+  const { annotations, outputName = 'robomemo_export' } = req.body;
+  if (!Array.isArray(annotations) || annotations.length === 0) {
+    return res.status(400).json({ error: 'annotations array required' });
+  }
+
+  // Convert each annotation to LeRobot V2 episode format
+  const episodes = annotations.map((ann, idx) => {
+    const primitives = ann.actionPrimitives || [];
+    const actions = primitives.map((p, i) => ({
+      step: i,
+      primitive: p.name,
+      params: p.params,
+      timestamp: i * 0.5,
+    }));
+
+    return {
+      episode_id: ann.bvid || `ep_${idx}`,
+      task: ann.taskSummary || ann.title || 'unknown task',
+      language_instruction: ann.taskSummary || ann.title || '',
+      domain: ann.domain || 'human_manipulation',
+      subject: ann.subject || '',
+      actions,
+      contact_mechanics: ann.contactMechanics || {},
+      source_video: ann.bvid || '',
+      annotated_by: 'RoboMemo AutoLabel',
+      created_at: new Date().toISOString(),
+    };
+  });
+
+  const manifest = {
+    format: 'lerobot_v2',
+    version: '2.0',
+    name: outputName,
+    num_episodes: episodes.length,
+    created_at: new Date().toISOString(),
+    episodes,
+  };
+
+  res.setHeader('Content-Disposition', `attachment; filename="${outputName}_lerobot_v2.json"`);
+  res.setHeader('Content-Type', 'application/json');
+  res.json(manifest);
+});
+
+/**
+ * POST /api/pipeline/export/pi05-sft
+ * Body: { annotations, outputName }
+ * Returns π₀.5 SFT training config (JSONL format, one line per action step).
+ */
+app.post('/api/pipeline/export/pi05-sft', (req, res) => {
+  const { annotations, outputName = 'robomemo_sft' } = req.body;
+  if (!Array.isArray(annotations) || annotations.length === 0) {
+    return res.status(400).json({ error: 'annotations array required' });
+  }
+
+  const lines = [];
+  for (const ann of annotations) {
+    const primitives = ann.actionPrimitives || [];
+    const task = ann.taskSummary || ann.title || 'manipulation task';
+
+    for (let i = 0; i < primitives.length; i++) {
+      const p = primitives[i];
+      const entry = {
+        id: `${ann.bvid || 'ep'}_step${i}`,
+        source_video: ann.bvid || '',
+        language_instruction: task,
+        action_primitive: p.name,
+        action_params: p.params,
+        step_index: i,
+        total_steps: primitives.length,
+        domain: ann.domain || 'human_manipulation',
+        contact_mechanics: ann.contactMechanics || {},
+        model_target: 'pi0.5',
+        split: 'train',
+      };
+      lines.push(JSON.stringify(entry));
+    }
+  }
+
+  const jsonl = lines.join('\n');
+  res.setHeader('Content-Disposition', `attachment; filename="${outputName}_pi05_sft.jsonl"`);
+  res.setHeader('Content-Type', 'application/x-ndjson');
+  res.send(jsonl);
+});
+
+// ─── Pipeline Helper Functions ────────────────────────────────────────────────
+
+function extractActionPrimitives(analysis) {
+  const primitives = [];
+  const seq = analysis.temporal?.action_sequence || [];
+
+  for (const step of seq) {
+    const name = step.action || '';
+    const desc = step.description || '';
+    const ts = step.timestamp || '';
+
+    // Heuristic mapping from natural language to primitive name + params
+    const lower = name.toLowerCase();
+    let prim = { name: 'act', params: { description: name, timestamp: ts }, raw: name };
+
+    if (/approach|move.*toward|reach/.test(lower)) {
+      const target = extractParam(desc, /toward\s+(\w+)|target[=:\s]+(\w+)/i) || 'object';
+      const speed = extractParam(desc, /(slow|fast|medium|quick)/i) || 'medium';
+      prim = { name: 'approach', params: { target, speed }, raw: name };
+    } else if (/align|position|orient/.test(lower)) {
+      const tool = extractParam(desc, /(?:using|with)\s+([\w\s-]+?)(?:\s+at|\s+to|,|$)/i) || 'tool';
+      prim = { name: 'align', params: { tool, description: name }, raw: name };
+    } else if (/insert|place.*into|push.*in/.test(lower)) {
+      prim = { name: 'insert', params: { description: name }, raw: name };
+    } else if (/rotat|turn|spin|twist/.test(lower)) {
+      const dir = /counter|anti/.test(lower) ? 'CCW' : 'CW';
+      prim = { name: 'rotate', params: { direction: dir, description: name }, raw: name };
+    } else if (/grasp|grip|pick|grab/.test(lower)) {
+      const target = extractParam(desc, /(\w+)\s+(?:with|using)/i) || 'object';
+      prim = { name: 'grasp', params: { target, description: name }, raw: name };
+    } else if (/lift|raise|pull.*up/.test(lower)) {
+      prim = { name: 'lift', params: { description: name }, raw: name };
+    } else if (/place|put.*down|release|set/.test(lower)) {
+      prim = { name: 'place', params: { description: name }, raw: name };
+    } else if (/retract|withdraw|pull.*back/.test(lower)) {
+      prim = { name: 'retract', params: { description: name }, raw: name };
+    } else if (/verify|check|inspect/.test(lower)) {
+      prim = { name: 'verify', params: { visual_check: true, description: name }, raw: name };
+    } else if (/push|press|apply.*force/.test(lower)) {
+      prim = { name: 'push', params: { description: name }, raw: name };
+    }
+
+    primitives.push(prim);
+  }
+
+  return primitives;
+}
+
+function extractContactMechanics(analysis) {
+  const contacts = analysis.mechanics?.contacts || [];
+  if (contacts.length === 0) return null;
+
+  const c = contacts[0];
+  return {
+    contactType: c.contact_type || '',
+    forceLevel: c.force_level || '',
+    contactPoints: c.contact_points || '',
+    frictionCoefficient: c.friction_coefficient || '',
+    forceProfile: analysis.mechanics?.force_profile || '',
+  };
+}
+
+function extractParam(text, regex) {
+  const m = text.match(regex);
+  if (!m) return null;
+  return (m[1] || m[2] || '').trim().toLowerCase() || null;
+}
 
 // GenRobot Dataset API
 app.get('/api/datasets/genrobot', (req, res) => {
@@ -2121,3 +2478,148 @@ app.post(
     }
   }
 );
+
+// ========== TRAINING MANAGEMENT API (pi-0.6-mem) ==========
+
+// In-memory training state (reset on server restart)
+let _trainingState = {
+  status: 'idle',       // 'idle' | 'running' | 'stopped' | 'completed'
+  currentStep: 0,
+  totalSteps: 80000,
+  loss: [],
+  checkpoints: [],
+  pid: null,
+  experimentName: '',
+  startedAt: null,
+};
+let _trainingInterval = null;
+
+/**
+ * POST /api/training/export-config
+ * Generate a pi-0.6-mem training configuration file (mock).
+ */
+app.post('/api/training/export-config', (req, res) => {
+  const { datasetId, modelConfig, exportConfig } = req.body || {};
+  if (!datasetId) return res.status(400).json({ error: 'datasetId required' });
+
+  const config = {
+    model: 'pi-0.6-mem',
+    dataset_id: datasetId,
+    checkpoint: modelConfig?.checkpointPath || 's3://openpi-assets/checkpoints/pi0_base',
+    lora: {
+      rank: modelConfig?.loraRank || 32,
+      alpha: modelConfig?.loraAlpha || 64,
+      dropout: modelConfig?.loraDropout || 0.05,
+    },
+    training: {
+      learning_rate: modelConfig?.learningRate || 5e-5,
+      batch_size: modelConfig?.batchSize || 16,
+      max_steps: modelConfig?.maxSteps || 80000,
+    },
+    memory: {
+      window_size: modelConfig?.memoryWindowSize || 8,
+      temporal_context_length: modelConfig?.temporalContextLength || 4,
+      use_episodic_memory: modelConfig?.useEpisodicMemory || false,
+    },
+    export_fields: {
+      memory_context: exportConfig?.memoryContext ?? true,
+      temporal_features: exportConfig?.temporalFeatures ?? true,
+      episode_id_prev: exportConfig?.episodePrevRef ?? false,
+    },
+    generated_at: new Date().toISOString(),
+  };
+
+  res.json({ success: true, config });
+});
+
+/**
+ * POST /api/training/launch
+ * Start a training run (mock: simulates step progress in memory).
+ */
+app.post('/api/training/launch', (req, res) => {
+  const { datasetId, modelConfig, launchConfig } = req.body || {};
+  if (!datasetId) return res.status(400).json({ error: 'datasetId required' });
+  if (_trainingState.status === 'running') {
+    return res.status(409).json({ error: 'A training run is already in progress' });
+  }
+
+  const totalSteps = modelConfig?.maxSteps || 80000;
+  _trainingState = {
+    status: 'running',
+    currentStep: 0,
+    totalSteps,
+    loss: [],
+    checkpoints: [],
+    pid: process.pid,
+    experimentName: launchConfig?.experimentName || `run_${Date.now()}`,
+    startedAt: new Date().toISOString(),
+  };
+
+  // Simulate training progress every 2 s
+  if (_trainingInterval) clearInterval(_trainingInterval);
+  _trainingInterval = setInterval(() => {
+    if (_trainingState.status !== 'running') {
+      clearInterval(_trainingInterval);
+      _trainingInterval = null;
+      return;
+    }
+    _trainingState.currentStep = Math.min(
+      _trainingState.currentStep + Math.floor(Math.random() * 50) + 10,
+      totalSteps
+    );
+    const fakeLoss = Math.max(0.01, 2.5 * Math.exp(-_trainingState.currentStep / (totalSteps * 0.3)) + Math.random() * 0.05);
+    _trainingState.loss.push(parseFloat(fakeLoss.toFixed(4)));
+    if (_trainingState.loss.length > 200) _trainingState.loss.shift();
+
+    // Save a checkpoint every 10 000 steps
+    const lastCk = _trainingState.checkpoints[_trainingState.checkpoints.length - 1];
+    const lastCkStep = lastCk?.step || 0;
+    if (_trainingState.currentStep - lastCkStep >= 10000) {
+      _trainingState.checkpoints.push({
+        step: _trainingState.currentStep,
+        timestamp: new Date().toLocaleString(),
+        size: `${(Math.random() * 2 + 1).toFixed(1)} GB`,
+      });
+    }
+
+    if (_trainingState.currentStep >= totalSteps) {
+      _trainingState.status = 'completed';
+      clearInterval(_trainingInterval);
+      _trainingInterval = null;
+    }
+  }, 2000);
+
+  res.json({ success: true, experimentName: _trainingState.experimentName, totalSteps });
+});
+
+/**
+ * GET /api/training/status
+ * Returns current training status + loss curve + checkpoints.
+ */
+app.get('/api/training/status', (req, res) => {
+  res.json({ ..._trainingState });
+});
+
+/**
+ * GET /api/training/checkpoints
+ * Returns only the checkpoint list.
+ */
+app.get('/api/training/checkpoints', (req, res) => {
+  res.json({ checkpoints: _trainingState.checkpoints });
+});
+
+/**
+ * POST /api/training/cancel
+ * Stop a running training job.
+ */
+app.post('/api/training/cancel', (req, res) => {
+  if (_trainingState.status !== 'running') {
+    return res.status(400).json({ error: 'No running training job to cancel' });
+  }
+  _trainingState.status = 'stopped';
+  if (_trainingInterval) {
+    clearInterval(_trainingInterval);
+    _trainingInterval = null;
+  }
+  res.json({ success: true, message: 'Training job cancelled' });
+});
