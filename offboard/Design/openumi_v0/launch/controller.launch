@@ -1,0 +1,9 @@
+<launch>
+
+<rosparam file="$(find openumi_test_export3_description)/launch/controller.yaml" command="load"/>
+<node name="controller_spawner" pkg="controller_manager" type="spawner" respawn="false" output="screen" ns="openumi_test_export3" args="right_jaw_prismatic_position_controller left_jaw_prismatic_position_controller joint_state_controller "/>
+<node name="robot_state_publisher" pkg="robot_state_publisher" type="robot_state_publisher" respawn="false" output="screen">
+  <remap from="/joint_states" to="/openumi_test_export3/joint_states"/>
+</node>
+
+</launch>
