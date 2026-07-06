@@ -33,7 +33,7 @@
 
 
 import os.path, sys, os, getopt
-from xml.dom.minidom import parse, parseString
+from xml.dom.minidom import parse
 import xml.dom
 import re
 import string
