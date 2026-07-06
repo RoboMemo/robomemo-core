@@ -316,10 +316,10 @@ def eval_lit(lex, symbols):
             raise XacroException("WTF2")
         try:
             return int(value)
-        except:
+        except (ValueError, TypeError):
             try:
                 return float(value)
-            except:
+            except (ValueError, TypeError):
                 return value
     raise XacroException("Bad literal")
 
