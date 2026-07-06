@@ -33,7 +33,6 @@
 
 
 import os.path, sys, os, getopt
-import subprocess
 from xml.dom.minidom import parse, parseString
 import xml.dom
 import re
