@@ -87,6 +87,15 @@ fusion:
   single_view_fallback: true # fill holes with best single-view projection (source=singleview)
   scale_from_beta: true      # hand metric scale from body shape beta
 
+  # Temporal smoothing (post-fusion). Zero-phase Butterworth low-pass on joint
+  # positions removes per-frame triangulation noise without temporal lag.
+  # Also majority-vote smooths source labels to prevent triangulated/singleview flicker.
+  temporal_smoothing:
+    enabled: true
+    cutoff_hz: 6.0    # low-pass cutoff; lower = smoother but may lag real fast motion
+    order: 3           # Butterworth filter order
+    source_window: 5   # sliding window for source label majority vote
+
   # OPTIONAL: global multi-view SMPL-X fitting (SMPLify-X based). SCAFFOLD ONLY —
   # fitting bodies are TODO pending cali re-record + VPoser. See
   # docs/MULTIVIEW_FITTING_PLAN.md. Enabled via --fusion global_fit.

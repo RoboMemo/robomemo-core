@@ -91,8 +91,4 @@ def map_hand(side: str, joints3d_smplx: np.ndarray, verts_smplx: np.ndarray | No
     return out
 
 
-def stamp_confidence(hand: dict, conf: float):
-    """Stamp the per-view detection confidence onto video/derived joints."""
-    for j in hand.values():
-        j["conf"] = float(conf)
-    return hand
+

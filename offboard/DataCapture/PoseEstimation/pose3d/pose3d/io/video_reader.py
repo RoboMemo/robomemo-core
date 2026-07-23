@@ -5,7 +5,6 @@ Reads frames as RGB uint8 HxWx3. Provides random-access by frame index and
 downsampled iteration (used by calibration sampling and inference batching).
 """
 from __future__ import annotations
-import math
 import cv2
 import numpy as np
 
@@ -75,7 +74,4 @@ class VideoReader:
         self.release()
 
 
-def sample_count(reader: VideoReader, target_fps: float) -> int:
-    """How many frames sample_at_fps will yield (for progress bars)."""
-    step = max(1, int(round((reader.fps or 59.94) / target_fps)))
-    return max(0, math.ceil(reader.n_frames / step)) or 1
+

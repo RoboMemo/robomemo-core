@@ -20,6 +20,4 @@ def extract_body(joints: np.ndarray) -> dict:
     return out
 
 
-def extract_body_batch(joints: np.ndarray) -> list[dict]:
-    """joints: (B,J,3). -> list of per-frame dicts."""
-    return [extract_body(j) for j in joints]
+

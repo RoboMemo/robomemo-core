@@ -1,34 +1,11 @@
 """
 pose3d.fit.multiview_fitter — global multi-view SMPL-X fitting (SCAFFOLD).
 
-Defines ONE SMPL-X(theta, beta) per frame and minimizes the multi-view
-reprojection + priors over all 3 cameras:
-
-    min_{θ,β}  Σ_v ‖Proj_v(SMPLX(θ,β)) − Kp2d_v‖²
-             + λ1·VPoser(θ_body) + λ2·JointLimit(θ)
-             + λ3·TemporalSmooth   + λ4·Penetration
-
-where Proj_v = K_v [R_v | t_v] from calibration.json.
-
-BASE: SMPLify-X (vchoutas/smplify-x) — we import its `prior`/`optimizers`/
-`body_model`/`losses` components and write the multi-view closure + warm-start
-here. Do NOT rewrite SMPLify-X from scratch.
-
-STATUS: SCAFFOLD. Signatures + config are fixed; fitting loop + loss bodies are
-TODO pending: (1) cali re-record, (2) VPoser download, (3) smplify-x vendored.
-The default triangulate pipeline is UNCHANGED — this is opt-in via
-`--fusion global_fit`.
+Defines ONE SMPL-X(theta, beta) per frame and minimizes multi-view reprojection
++ priors over all cameras. Opt-in via --fusion global_fit (not wired yet).
 """
 from __future__ import annotations
 import numpy as np
-
-from ..schema import BODY_JOINTS, HAND_LAYOUT, BODY_JOINT_NAMES, hand_joint_names
-
-# Hand joint names that enter the reprojection loss (wrist + 15 SMPL-X phalanges;
-# tips/extra/palm are derived AFTER fitting and excluded from reproj).
-def hand_kp_for_reproj(side: str) -> list[str]:
-    return [n for n, (kind, _idx) in HAND_LAYOUT[side].items() if kind in ("wrist", "joint")]
-
 
 class MultiViewFitter:
     """Global multi-view SMPL-X fitter (scaffold; fitting bodies TODO)."""
@@ -163,20 +140,3 @@ class MultiViewFitter:
             out[v] = x[:, :2] / z[:, None]
         return out
 
-
-# Default config block (mirrors config.yaml: fusion.global_fit)
-DEFAULT_CONFIG = {
-    "weights": {            # see MULTIVIEW_FITTING_PLAN.md §2
-        "reproj_body": 1.0,
-        "reproj_hand": 0.75,
-        "vposer": 4.0,      # λ1 (body only)
-        "joint_limit": 2.0, # λ2 (fingers scaled up internally)
-        "shape": 5.0,
-        "temporal": 2.0,    # λ3 (sequence mode)
-        "penetration": 0.0, # λ4 (off until stable)
-    },
-    "optimizer": "lbfgs",   # 'lbfgs' (smplifyx lbfgs_ls) | 'adam'
-    "iters_per_stage": [10, 15, 15],   # warm-start: short stage schedule
-    "downsample": 3,        # fit every Nth frame, interpolate the rest
-    "temporal": False,      # v1 per-frame; v2 True for sequence smoothing
-}

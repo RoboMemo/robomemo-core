@@ -25,8 +25,12 @@ import os
 import sys
 import argparse
 import subprocess
-import yaml
+from collections import Counter
+
+import cv2
 import numpy as np
+import tqdm
+import yaml
 
 # Ensure the inner `pose3d` package is importable when run from this dir.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -38,6 +42,8 @@ from pose3d.calib.multicam_calib import calibrate_multicam, build_projection_mat
 from pose3d.body.smplerx_wrapper import SMPLerXWrapper
 from pose3d.fuse.view_selector import fuse_body_frame
 from pose3d.fuse.hand_attach import attach_hands
+from pose3d.fuse.temporal import smooth_poses
+from pose3d.schema import BODY_JOINT_NAMES, hand_joint_names
 from pose3d.viz import skeleton_viewer as viz
 
 VIEWS_DEFAULT = ["H", "L", "R"]
@@ -183,7 +189,6 @@ def main():
     gens = {v: readers[v].iter_frames(step=1) for v in views}
 
     frames_out = []
-    import tqdm
     # n may be unreliable on HEVC (CAP_PROP_FRAME_COUNT can be 0). Guard: if all
     # 3 generators are exhausted we stop, so a bad n can't create an empty-frame bomb.
     for i in tqdm.tqdm(range(n), desc="pose3d frames"):
@@ -216,7 +221,26 @@ def main():
         primary = max(per_view, key=lambda v: per_view[v].get("det_score", 0.0)) if per_view else cfg["reference"]
         frames_out.append(make_frame(i / fps, i, primary, fused_body, hands))
 
-    # ---- 5. write poses.json ----
+    # ---- 5. temporal smoothing ----
+    ts_cfg = cfg.get("fusion", {}).get("temporal_smoothing", {})
+    if ts_cfg.get("enabled", True) and len(frames_out) >= 4:
+        all_joint_names = (BODY_JOINT_NAMES
+                           + hand_joint_names("L")
+                           + hand_joint_names("R"))
+        cutoff = float(ts_cfg.get("cutoff_hz", 6.0))
+        order = int(ts_cfg.get("order", 3))
+        src_win = int(ts_cfg.get("source_window", 5))
+        print(f"[pipeline] temporal smoothing: cutoff={cutoff}Hz order={order} "
+              f"window={src_win}")
+        # Extract joint dicts from make_frame output for smoothing
+        raw_joints = [f["joints"] for f in frames_out]
+        smoothed = smooth_poses(raw_joints, all_joint_names,
+                                fps=fps, cutoff_hz=cutoff, order=order,
+                                source_window=src_win)
+        for f, sj in zip(frames_out, smoothed):
+            f["joints"] = sj
+
+    # ---- 6. write poses.json ----
     poses_path = os.path.join(out_dir, cfg["output"]["poses_json"])
     header = {"version": "1.0", "fps": fps, "timeline_master": cfg["reference"],
               "scale": "metric_meters",
@@ -225,7 +249,7 @@ def main():
     print(f"[pipeline] wrote {poses_path}  ({len(frames_out)} frames)")
     _report_coverage(frames_out)
 
-    # ---- 6. viz ----
+    # ---- 7. viz ----
     viz_dir = os.path.join(out_dir, cfg["output"].get("viz_dir", "viz"))
     nv = cfg["output"].get("viz_num_frames", 12)
     step = max(1, len(frames_out) // nv)
@@ -241,10 +265,9 @@ def main():
                     continue
                 rec = wrapper.infer_frame(rgb)
                 if rec.get("has_person"):
-                    import cv2, os as _os
-                    _os.makedirs(viz_dir, exist_ok=True)
+                    os.makedirs(viz_dir, exist_ok=True)
                     vis = viz.overlay_body2d(rgb, rec["body_joints2d"], rec.get("det_score", 0.0))
-                    cv2.imwrite(_os.path.join(viz_dir, f"{v}_{idx:06d}.png"),
+                    cv2.imwrite(os.path.join(viz_dir, f"{v}_{idx:06d}.png"),
                                 cv2.cvtColor(vis, cv2.COLOR_RGB2BGR))
     # 3D fused body for a couple of frames
     for idx in sample_idx[:3]:
@@ -255,9 +278,7 @@ def main():
 
 
 def _report_coverage(frames):
-    from pose3d.schema import BODY_JOINT_NAMES, hand_joint_names
     names = BODY_JOINT_NAMES + hand_joint_names("L") + hand_joint_names("R")
-    from collections import Counter
     src_counts = Counter()
     for f in frames:
         for jn in names:

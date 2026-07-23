@@ -115,8 +115,4 @@ def canonicalize(corners: np.ndarray, pattern) -> np.ndarray:
     return g.reshape(-1, 2)
 
 
-def draw(frame_bgr: np.ndarray, corners, pattern) -> np.ndarray:
-    """Debug overlay."""
-    vis = frame_bgr.copy()
-    cv2.drawChessboardCorners(vis, pattern, corners, True)
-    return vis
+

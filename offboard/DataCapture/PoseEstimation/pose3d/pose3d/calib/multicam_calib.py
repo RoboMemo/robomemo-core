@@ -144,7 +144,14 @@ def calibrate_multicam(cali_paths: dict, cfg: dict) -> dict:
 def _stereo_best(obj_pts, pts_ref, pts_other, K1, d1, K2, d2, img_size,
                  max_baseline_m=0.5):
     """Pick the best stereoCalibrate solution across flag-configs x 180-flip,
-    penalizing unrealistic baselines.
+    penalizing unrealistic baselines and directions.
+
+    IMPROVEMENTS over baseline:
+      - Penalizes baselines that are not roughly horizontal (head-cam rigs have
+        cameras mounted side-by-side, so the baseline should be predominantly in
+        the X direction of the camera frame).
+      - Uses a combined score of RMS + baseline magnitude penalty + direction
+        penalty for more robust solution selection.
 
     With weakly-constrained data (limited board coverage), different flag configs
     converge to wildly different baselines (e.g. 17cm vs 261cm for the same pair).
@@ -172,7 +179,16 @@ def _stereo_best(obj_pts, pts_ref, pts_other, K1, d1, K2, d2, img_size,
             if not np.isfinite(ret):
                 continue
             bl = float(np.linalg.norm(t))
-            score = ret if bl < max_baseline_m else ret + 1e6   # reject absurd baselines
+            if bl < 1e-6:
+                continue  # degenerate zero baseline
+            # Baseline magnitude penalty
+            mag_penalty = 0.0 if bl < max_baseline_m else 1e6
+            # Direction penalty: head-cam rig baselines should be roughly horizontal
+            # (dominant component in X). Penalize if vertical component dominates.
+            t_norm = t.ravel() / bl
+            horizontalness = abs(t_norm[0])  # should be close to 1 for side-by-side
+            dir_penalty = (1.0 - horizontalness) * 100.0  # 0 if perfect horizontal
+            score = ret + mag_penalty + dir_penalty
             tag = f"{cname}/{fname}"
             if best is None or score < best[0]:
                 best = (score, float(ret), R, t, _K2, np.ravel(_d2), tag)

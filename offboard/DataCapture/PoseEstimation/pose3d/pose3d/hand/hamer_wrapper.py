@@ -75,7 +75,7 @@ class HaMeRWrapper:
             out[f"{finger}_Extra"] = {"xyz": (1 - EXTRA_RATIO) * a + EXTRA_RATIO * b,
                                        "conf": 1.0, "source": Source.DERIVED.value}
         # Palm_Center = centroid of Wrist + 4 MCPs (derived)
-        pts = [out["Wrist"]["xyz"]] + [out[f"{m}_MCP"]["xyz"] for m in PALM_MCP_NAMES]
+        pts = [out["Wrist"]["xyz"]] + [out[m]["xyz"] for m in PALM_MCP_NAMES]
         out["Palm_Center"] = {"xyz": np.mean(np.stack(pts, 0), 0),
                               "conf": 1.0, "source": Source.DERIVED.value}
         assert set(out) == set(HAND_JOINTS_BASE)

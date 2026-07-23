@@ -109,30 +109,6 @@ def overlay_body2d(rgb: np.ndarray, body_joints2d: dict, det_score: float = 0.0,
     return vis
 
 
-def save_overlays(per_view_records: dict, out_dir: str, view: str, indices: list[int]):
-    """Save 2D-overlay PNGs for sampled frames of one view.
-
-    per_view_records: {frame_idx: {view: record}}. Writes <out_dir>/<view>_<idx>.png
-    """
-    import os
-    import cv2
-    os.makedirs(out_dir, exist_ok=True)
-    for idx in indices:
-        rec = per_view_records.get(idx, {}).get(view)
-        if not rec or not rec.get("has_person"):
-            continue
-        vis = overlay_body2d(_read_rgb(rec["_rgb_path"]), rec["body_joints2d"],
-                             rec.get("det_score", 0.0))
-        cv2.imwrite(os.path.join(out_dir, f"{view}_{idx:06d}.png"),
-                    cv2.cvtColor(vis, cv2.COLOR_RGB2BGR))
-
-
-def _read_rgb(path):
-    import cv2
-    bgr = cv2.imread(path)
-    return cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
-
-
 def plot_body3d(joints_xyz: dict, out_path: str | None = None,
                 sources: dict | None = None, title: str | None = None):
     """3D plot of the fused metric body + hands (H frame).
