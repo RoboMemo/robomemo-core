@@ -1,0 +1,28 @@
+# pose3d — pip pins (companion to environment.yml).
+# torch/torchvision installed by conda (cu126, Blackwell). mmcv-full 1.7.1 + the
+# SMPLer-X bundled mmpose (transformer_utils) are the regressor's mm deps — they
+# CANNOT be removed; see README §9 for the Blackwell build/shim path.
+#
+ultralytics>=8.3
+smplx==0.1.28
+einops
+transformers
+timm
+yacs
+tabulate
+pandas
+matplotlib
+opencv-python==4.9.0.80
+scipy>=1.10,<1.13
+imageio
+tqdm
+pyyaml
+simplejson
+librosa>=0.10,<0.11
+soundfile
+audioread
+huggingface_hub
+# mmcv 1.x (1.x API: mmcv.Config / mmcv.ops.roi_align) — no cu126/torch2.7 wheel:
+mmcv-full==1.7.1
+# pytorch3d only if smplx/SMPLer-X import it; build from source for torch2.7:
+# pip install "git+https://github.com/facebookresearch/pytorch3d.git"

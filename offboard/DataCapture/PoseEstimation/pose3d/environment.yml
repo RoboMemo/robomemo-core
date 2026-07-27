@@ -1,0 +1,61 @@
+# =====================================================================
+# pose3d — conda environment (Linux + NVIDIA CUDA, RTX 5080 / Blackwell)
+#
+# Blackwell (sm_120) needs torch >= 2.6 with cu124/cu126/cu128. We pin
+# torch 2.7 + cu126 (Blackwell-mature). cu128 (torch 2.7 nightly/stable)
+# also works — pick the channel matching your driver.
+#
+# DETECTION uses ultralytics YOLO (no mmdet). The SMPLer-X REGRESSOR still
+# imports mmcv (mmcv.ops.roi_align + mmcv.Config) and the bundled mmpose
+# (transformer_utils) — those CANNOT be removed (see README §9 + the
+# mmcv/roi_align note). mmcv-full 1.7.1 has NO cu126/torch2.7 wheel; it must
+# be source-built OR the roi_align op shimmed to torchvision — decide per README.
+# =====================================================================
+name: pose3d
+channels:
+  - pytorch
+  - nvidia
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.11
+  - pytorch=2.7.*
+  - torchvision=0.22.*
+  - pytorch-cuda=12.6          # Blackwell; use 12.8 channel if your driver supports cu128
+  - numpy=1.26.4               # PIN <2 — the smplx/mmcv-era stack breaks on numpy 2.x
+  - pip=24.0
+  - pip:
+      # --- person detection (replaces mmdet) ---
+      - ultralytics>=8.3
+      # --- SMPLer-X regressor deps ---
+      - smplx==0.1.28
+      - einops
+      - transformers
+      - timm
+      - yacs
+      - tabulate
+      - pandas
+      - matplotlib
+      # mmcv 1.x (SMPLer-X uses the 1.x API: mmcv.Config, mmcv.runner, mmcv.ops.roi_align).
+      # NO prebuilt cu126/torch2.7 wheel -> source build OR torchvision roi_align shim.
+      #   pip install mmcv-full==1.7.1   (try; may need: -f <cu126/torch2.7 index> or source)
+      # See README §9 for the Blackwell path (this is the one open dependency).
+      - mmcv-full==1.7.1
+      # mmpose is SMPLer-X's bundled fork (transformer_utils) — installed by
+      # download_models.sh:  pip install -v -e third_party/SMPLer-X/main/transformer_utils
+      # --- calibration / triangulation / io ---
+      - opencv-python==4.9.0.80
+      - scipy>=1.10,<1.13
+      - imageio
+      - tqdm
+      - pyyaml
+      - simplejson
+      # --- time alignment (Data_Preprocessing/align_audio.py) ---
+      - librosa>=0.10,<0.11
+      - soundfile
+      - audioread
+      # --- model fetching ---
+      - huggingface_hub
+      # --- optional: HaMeR (only if hand.backend=hamer) ---
+      # - chumpy
+      # - git+https://github.com/otaheri/MANO.git

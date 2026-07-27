@@ -1,0 +1,26 @@
+<?xml version="1.0" ?>
+<robot name="openumi_test_export3" xmlns:xacro="http://www.ros.org/wiki/xacro" >
+
+<transmission name="right_jaw_prismatic_tran">
+  <type>transmission_interface/SimpleTransmission</type>
+  <joint name="right_jaw_prismatic">
+    <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+  </joint>
+  <actuator name="right_jaw_prismatic_actr">
+    <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+    <mechanicalReduction>1</mechanicalReduction>
+  </actuator>
+</transmission>
+
+<transmission name="left_jaw_prismatic_tran">
+  <type>transmission_interface/SimpleTransmission</type>
+  <joint name="left_jaw_prismatic">
+    <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+  </joint>
+  <actuator name="left_jaw_prismatic_actr">
+    <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+    <mechanicalReduction>1</mechanicalReduction>
+  </actuator>
+</transmission>
+
+</robot>

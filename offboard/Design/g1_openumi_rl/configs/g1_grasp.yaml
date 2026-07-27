@@ -1,0 +1,92 @@
+# G1 + OpenUMI bimanual grasping — training configuration
+# Compatible with mjlab / stable-baselines3 PPO / custom RL loops
+
+env:
+  xml_path: "models/g1_with_openumi.xml"   # relative to project root
+  sim_dt: 0.002          # MuJoCo physics step (500 Hz)
+  control_dt: 0.02       # policy control step (50 Hz)
+  max_episode_steps: 500
+
+  reward_weights:
+    grasp:  10.0
+    dist:   1.0
+    energy: 0.0001
+    alive:  0.05
+    fall:   5.0
+
+agent:
+  algorithm: PPO
+  obs_dim: 84            # see G1GraspEnv.OBS_DIM
+  act_dim: 21            # waist(3) + left_arm(7) + right_arm(7) + grippers(4)
+
+  # PPO hyperparameters
+  learning_rate: 3.0e-4
+  n_steps: 2048          # steps per rollout per env
+  batch_size: 256
+  n_epochs: 10
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_range: 0.2
+  ent_coef: 0.01
+  vf_coef: 0.5
+  max_grad_norm: 0.5
+
+  # Network architecture
+  policy_net: [256, 256, 128]
+  value_net:  [256, 256, 128]
+  activation: "tanh"
+
+training:
+  total_timesteps: 10_000_000
+  n_envs: 8              # parallel environments
+  eval_freq: 50_000      # eval every N steps
+  save_freq: 100_000
+  log_dir: "logs/"
+  save_dir: "checkpoints/"
+
+  # Normalise observations and rewards
+  normalize_obs: true
+  normalize_reward: true
+
+  seed: 42
+
+# Joint name reference (33 actuators, policy acts on indices 12-32)
+joint_names:
+  # Legs (0-11, not controlled by policy)
+  - left_hip_pitch_joint
+  - left_hip_roll_joint
+  - left_hip_yaw_joint
+  - left_knee_joint
+  - left_ankle_pitch_joint
+  - left_ankle_roll_joint
+  - right_hip_pitch_joint
+  - right_hip_roll_joint
+  - right_hip_yaw_joint
+  - right_knee_joint
+  - right_ankle_pitch_joint
+  - right_ankle_roll_joint
+  # Waist (12-14)
+  - waist_yaw_joint
+  - waist_roll_joint
+  - waist_pitch_joint
+  # Left arm (15-21)
+  - left_shoulder_pitch_joint
+  - left_shoulder_roll_joint
+  - left_shoulder_yaw_joint
+  - left_elbow_joint
+  - left_wrist_roll_joint
+  - left_wrist_pitch_joint
+  - left_wrist_yaw_joint
+  # Right arm (22-28)
+  - right_shoulder_pitch_joint
+  - right_shoulder_roll_joint
+  - right_shoulder_yaw_joint
+  - right_elbow_joint
+  - right_wrist_roll_joint
+  - right_wrist_pitch_joint
+  - right_wrist_yaw_joint
+  # Grippers (29-32)
+  - l_gripper_right_jaw_joint
+  - l_gripper_left_jaw_joint
+  - r_gripper_right_jaw_joint
+  - r_gripper_left_jaw_joint

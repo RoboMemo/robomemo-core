@@ -1,0 +1,87 @@
+<?xml version="1.0"?>
+<robot name="openumi_test_export3">
+
+  <material name="silver">
+    <color rgba="0.700 0.700 0.700 1.000"/>
+  </material>
+
+  <link name="base_link">
+    <inertial>
+      <origin xyz="2.5437823837415984e-05 0.023944713415808627 4.60128742578899e-07" rpy="0 0 0"/>
+      <mass value="0.876668581434838"/>
+      <inertia ixx="0.000655" iyy="0.00079" izz="0.00103" ixy="1e-06" iyz="0.0" ixz="-0.0"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="meshes/base_link.stl" scale="0.001 0.001 0.001"/>
+      </geometry>
+      <material name="silver"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="meshes/base_link.stl" scale="0.001 0.001 0.001"/>
+      </geometry>
+    </collision>
+  </link>
+
+  <link name="right_jaw_1">
+    <inertial>
+      <origin xyz="-0.011671666802097788 0.004820774216525199 -0.05115973160753859" rpy="0 0 0"/>
+      <mass value="0.7920390752045255"/>
+      <inertia ixx="0.00261" iyy="0.001793" izz="0.001082" ixy="-0.000134" iyz="0.000771" ixz="0.000138"/>
+    </inertial>
+    <visual>
+      <origin xyz="-0.0775 0.020001 0.000001" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="meshes/right_jaw_1.stl" scale="0.001 0.001 0.001"/>
+      </geometry>
+      <material name="silver"/>
+    </visual>
+    <collision>
+      <origin xyz="-0.0775 0.020001 0.000001" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="meshes/right_jaw_1.stl" scale="0.001 0.001 0.001"/>
+      </geometry>
+    </collision>
+  </link>
+
+  <link name="left_jaw_1">
+    <inertial>
+      <origin xyz="0.014210758546782998 0.004371650851500427 -0.04400310769786983" rpy="0 0 0"/>
+      <mass value="0.7420544312057148"/>
+      <inertia ixx="0.002596" iyy="0.001774" izz="0.001013" ixy="0.000127" iyz="0.000773" ixz="-7.6e-05"/>
+    </inertial>
+    <visual>
+      <origin xyz="0.0775 0.020001 0.000001" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="meshes/left_jaw_1.stl" scale="0.001 0.001 0.001"/>
+      </geometry>
+      <material name="silver"/>
+    </visual>
+    <collision>
+      <origin xyz="0.0775 0.020001 0.000001" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="meshes/left_jaw_1.stl" scale="0.001 0.001 0.001"/>
+      </geometry>
+    </collision>
+  </link>
+
+  <joint name="right_jaw_prismatic" type="prismatic">
+    <origin xyz="0.0775 -0.020001 -0.000001" rpy="0 0 0"/>
+    <parent link="base_link"/>
+    <child link="right_jaw_1"/>
+    <axis xyz="-1 0 0"/>
+    <limit lower="0.0" upper="0.044339" effort="100" velocity="100"/>
+  </joint>
+
+  <joint name="left_jaw_prismatic" type="prismatic">
+    <origin xyz="-0.0775 -0.020001 -0.000001" rpy="0 0 0"/>
+    <parent link="base_link"/>
+    <child link="left_jaw_1"/>
+    <axis xyz="-1 0 0"/>
+    <limit lower="-0.044339" upper="0.0" effort="100" velocity="100"/>
+  </joint>
+
+</robot>

@@ -1,0 +1,120 @@
+# =====================================================================
+# 3D Whole-Body Pose Pipeline — default configuration
+# Target platform: Linux + NVIDIA CUDA. Edit paths to match your machine.
+# =====================================================================
+
+# ---- Paths -----------------------------------------------------------
+# Repo root = the DataCapture/ directory (where dataset/ lives).
+# Set this to your absolute dataset root.
+dataset_root: dataset
+
+# Recordings live under <dataset_root>/Ego4WholeBody/<recording>/{H,L,R}.MP4
+corpus: Ego4WholeBody
+recording: 0721-1            # which recording to run; pipeline is generic per recording
+calibration_recording: 0721-cali   # the checkerboard calibration recording
+
+# Views (camera names). All 3 head-mounted, top-to-bottom, whole-body.
+views: [H, L, R]
+reference: H                 # H is the audio-alignment + 3D reference frame
+video_ext: .MP4
+
+# SMPL-X body model — ALREADY PROVIDED (no download). Verified present.
+smplx_model_dir: models/smplx
+smplx_gender: neutral        # neutral | male | female
+
+# ---- Output ----------------------------------------------------------
+output:
+  dir: Ego4WholeBody/{recording}/pose3d_out
+  poses_json: poses.json     # per-frame 78-joint (24 body + 27/hand x2) 3D
+  viz_dir: viz               # sampled visualizations (optional)
+  viz_num_frames: 12
+
+# ---- Time alignment (reuses Data_Preprocessing/align_audio.py) ------
+align:
+  enabled: true
+  script: Data_Preprocessing/align_audio.py
+  sr: 16000
+  # align_audio.py default mapping assumes H.MOV; we pass the correct one:
+  videos_map: {H: H.MP4, L: L.MP4, R: R.MP4}
+
+# ---- Multi-view calibration (MAIN LINE, metric 3D anchor) ------------
+calibration:
+  enabled: true
+  board_cols: 11             # OpenCV expects INNER corners count, NOT squares
+  board_rows: 8
+  board_square_size_m: 0.02  # 20 mm — the metric scale anchor for DLT triangulation
+  pattern_fallback: [10, 7]  # if findChessboardCorners(11,8) fails, retry (10,7)
+  sample_fps: 2.0            # sample board frames from cali videos at this fps
+  min_shared_frames: 8       # min frames where >=2 cams see the board for stereo
+  stereo_rms_thr_px: 2.0     # warn if a stereo pair RMS exceeds this
+  stereo_max_baseline_m: 0.5 # head-cam rigs: baseline << this; reject absurd-baseline
+                             #   stereo solutions (weakly-constrained data otherwise
+                             #   returns 1-2m "baselines"). Used as a sanity filter.
+  out: calibration.json
+
+# ---- Body: SMPLer-X-H32 (single main model, body+hands in one pass) --
+# Real upstream paths (verified against caizhongang/SMPLer-X main/inference.py).
+smplerx:
+  repo_dir: third_party/SMPLer-X
+  config: main/config/config_smpler_x_h32.py        # yacs config in the repo
+  checkpoint: pretrained_models/smpler_x_h32_correct.pth.tar   # H32* camera-fix
+  device: cuda               # 'cuda' on Linux+NVIDIA; 'cpu' only for tiny smoke
+  gender: neutral
+  # Person DETECTION uses ultralytics YOLO (NOT mmdet) — mmdet has no torch2.6/
+  # cu124/Blackwell wheel. YOLO is fetched on first run; download_models.sh also
+  # fetches it. Downstream crop/regressor is the upstream SMPLer-X path, unchanged.
+  detector: yolov8n.pt       # yolov8n | yolov8s | yolov8m (n is plenty for 1 person)
+  det_conf: 0.5              # YOLO person confidence threshold
+
+# ---- Hand backend ----------------------------------------------------
+hand:
+  backend: smplx             # smplx (default, from SMPLer-X) | hamer (OPTIONAL)
+  # HaMeR is OPTIONAL — disabled by default. Enable only if SMPLer-X hand
+  # precision is insufficient AND you have obtained MANO_RIGHT.pkl.
+  hamer:
+    repo_dir: third_party/hamer
+    checkpoint: models/hamer.pkl
+    mano_path: dataset/models/mano/MANO_RIGHT.pkl  # user-provided (license)
+
+# ---- Fusion / triangulation ------------------------------------------
+# CLI: --fusion {triangulate, global_fit} (default triangulate, unchanged).
+fusion:
+  mode: triangulate_first    # triangulate_first | single_view
+  # Body joints: DLT triangulate across views -> metric 3D (H frame, meters).
+  # Non-overlap (FOV hole) -> best single-view reproject. Hands never triangulated.
+  min_views_for_triangulation: 2
+  reproj_error_thr_px: 30.0  # drop outlier views if per-view reprojection err > thr
+  single_view_fallback: true # fill holes with best single-view projection (source=singleview)
+  scale_from_beta: true      # hand metric scale from body shape beta
+
+  # Temporal smoothing (post-fusion). Zero-phase Butterworth low-pass on joint
+  # positions removes per-frame triangulation noise without temporal lag.
+  # Also majority-vote smooths source labels to prevent triangulated/singleview flicker.
+  temporal_smoothing:
+    enabled: true
+    cutoff_hz: 6.0    # low-pass cutoff; lower = smoother but may lag real fast motion
+    order: 3           # Butterworth filter order
+    source_window: 5   # sliding window for source label majority vote
+
+  # OPTIONAL: global multi-view SMPL-X fitting (SMPLify-X based). SCAFFOLD ONLY —
+  # fitting bodies are TODO pending cali re-record + VPoser. See
+  # docs/MULTIVIEW_FITTING_PLAN.md. Enabled via --fusion global_fit.
+  global_fit:
+    smplifyx_repo: third_party/smplify-x
+    vposer_dir: dataset/models/vposer        # user-provided (VPoser download)
+    optimizer: lbfgs                          # lbfgs (smplifyx lbfgs_ls) | adam
+    iters_per_stage: [10, 15, 15]
+    downsample: 3                             # fit every Nth frame, interpolate rest
+    temporal: false                           # v1 per-frame; v2 sequence smoothing
+    weights:                                  # see MULTIVIEW_FITTING_PLAN.md §2
+      reproj_body: 1.0
+      reproj_hand: 0.75
+      vposer: 4.0          # λ1 (body pose prior; hands excluded)
+      joint_limit: 2.0     # λ2 (fingers scaled up internally — hands rely on this)
+      shape: 5.0
+      temporal: 2.0        # λ3 (sequence mode only)
+      penetration: 0.0     # λ4 (off until stable)
+
+# ---- Misc ------------------------------------------------------------
+fps: null                    # null = use source fps (59.94); else resample to this
+log_level: INFO
