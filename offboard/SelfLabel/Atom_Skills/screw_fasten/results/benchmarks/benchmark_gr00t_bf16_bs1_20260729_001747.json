@@ -1,0 +1,50 @@
+{
+  "config": {
+    "model_name": "gr00t",
+    "checkpoint_path": "",
+    "precision": "bf16",
+    "use_cuda_graph": false,
+    "use_torch_compile": false,
+    "use_tensorrt": false,
+    "tensorrt_engine": "",
+    "warmup_iters": 20,
+    "measure_iters": 200,
+    "batch_size": 1,
+    "image_size": [
+      224,
+      224
+    ],
+    "state_dim": 32,
+    "action_dim": 8,
+    "action_horizon": 16,
+    "num_denoise_steps": 10,
+    "use_real_model": false,
+    "output_dir": "results/benchmarks"
+  },
+  "latency_ms": {
+    "mean_ms": 14.54281629562378,
+    "median_ms": 13.998496055603027,
+    "p95_ms": 21.010714054107666,
+    "p99_ms": 23.460729408264157,
+    "min_ms": 12.624959945678711,
+    "max_ms": 38.17222213745117,
+    "std_ms": 2.658983485636783
+  },
+  "throughput_fps": 68.76247211490389,
+  "gpu_info": {
+    "name": "NVIDIA GeForce RTX 5070 Ti Laptop GPU",
+    "total_memory_mb": 12226.5625,
+    "compute_capability": "12.0",
+    "mem_allocated_before_mb": 0.0,
+    "mem_allocated_after_mb": 1536.51416015625,
+    "mem_peak_mb": 3107.4052734375,
+    "mem_reserved_mb": 3158.0
+  },
+  "precision_info": {
+    "mode": "bf16",
+    "cuda_graph": false,
+    "torch_compile": false,
+    "tensorrt": false
+  },
+  "timestamp": "2026-07-29T00:17:47.257890"
+}

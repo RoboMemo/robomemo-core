@@ -76,6 +76,26 @@ class OpenPIModelCfg:
     noise_std: float = 1.0
     """Standard deviation of the Gaussian noise prior."""
 
+    # === Inference optimization (Blackwell RTX 5080/5070Ti) ===
+    use_cuda_graph: bool = True
+    """Capture CUDA Graph after warmup (~1.3x for single-step, less for multi-step)."""
+    use_torch_compile: bool = True
+    """Apply torch.compile with mode='reduce-overhead'."""
+    use_flash_attn: bool = True
+    """Enable Flash Attention for the PaliGemma backbone."""
+    quantization: str = "bf16"
+    """Inference precision: bf16 | fp16 | fp8 (TensorRT)."""
+    use_tensorrt: bool = False
+    """Use TensorRT engine for inference."""
+    tensorrt_engine_path: str = ""
+    """Path to exported TensorRT engine."""
+
+    # Flow step distillation (see roboforce_optimize.distill_flow)
+    distilled_steps: int = 4
+    """Number of distilled flow steps (default 4, down from 10 -> ~2.5x speedup)."""
+    use_early_stop: bool = True
+    """Early stop flow decoding when action converges."""
+
 
 @dataclass
 class OpenPILoraCfg:
@@ -134,7 +154,7 @@ class OpenPITrainingCfg:
     # Mixed precision
     fp16: bool = False
     bf16: bool = True
-    """Use bf16 mixed precision (recommended for RTX 5090)."""
+    """Use bf16 mixed precision (recommended for RTX 5080 / 5090)."""
 
     # Flow matching loss
     flow_loss_weight: float = 1.0
@@ -281,7 +301,16 @@ def generate_openpi_config(cfg: OpenPIFinetuneCfg | None = None) -> dict:
                 "num_flow_steps": cfg.model.num_flow_steps,
                 "schedule": cfg.model.flow_schedule,
                 "noise_std": cfg.model.noise_std,
+                "distilled_steps": cfg.model.distilled_steps,
+                "use_early_stop": cfg.model.use_early_stop,
             },
+            # Inference optimization (Blackwell RTX 5080/5070Ti)
+            "use_cuda_graph": cfg.model.use_cuda_graph,
+            "use_torch_compile": cfg.model.use_torch_compile,
+            "use_flash_attn": cfg.model.use_flash_attn,
+            "quantization": cfg.model.quantization,
+            "use_tensorrt": cfg.model.use_tensorrt,
+            "tensorrt_engine_path": cfg.model.tensorrt_engine_path,
         },
 
         # LoRA

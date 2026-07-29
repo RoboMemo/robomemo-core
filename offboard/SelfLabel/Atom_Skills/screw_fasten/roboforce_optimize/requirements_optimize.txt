@@ -1,0 +1,29 @@
+# RoboForce optimization dependencies
+# Install on the RTX 5080 / 5070Ti Linux machine:
+#   pip install -r requirements_optimize.txt
+
+# Core (already present in pose3d env)
+torch>=2.7.0
+numpy<2
+
+# CUDA Graph optimization (torch >= 2.6 has native support)
+# Already included in torch 2.7+
+
+# TensorRT for FP8/FP4 quantization (Blackwell)
+tensorrt>=10.6.0          # Required for FP8 on Blackwell
+tensorrt-cu12>=10.6.0     # CUDA 12.x bindings
+onnx>=1.16.0
+onnxruntime-gpu>=1.18.0
+
+# NVIDIA Model Optimizer for FP8/FP4 quantization
+nvidia-modelopt~=0.28.0   # FP8 quantization toolkit
+
+# Flash Attention (for scaled dot product)
+# torch >= 2.5 has native flash_attn via torch.backends.cuda
+
+# GPU-accelerated video decoding
+torchvision>=0.22.0       # includes GPU VideoReader (NVDEC)
+av>=12.0.0                # PyAV fallback
+
+# Profiling
+nsight-compute>=2024.3.0  # For kernel-level profiling

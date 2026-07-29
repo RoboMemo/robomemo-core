@@ -73,16 +73,19 @@ def triangulate_joint(view_data: dict, Ps: dict,
         if max_err <= reproj_thr_px:
             break
 
-        # Compute robust threshold from error distribution
+        # If median error already exceeds the user threshold, the DLT
+        # is pathological — force-drop the worst view regardless of MAD.
         median_err = float(np.median(errs))
-        mad = float(np.median(np.abs(errs - median_err)))
-        # 1.4826 scales MAD to match std for Gaussian; 3x is ~99.7%
-        robust_thr = median_err + 3.0 * mad * 1.4826 if mad > 1e-6 else reproj_thr_px
-        # Use the tighter of the robust estimate and the user-set floor
-        effective_thr = max(reproj_thr_px, robust_thr)
-
-        if max_err <= effective_thr:
-            break
+        if median_err > reproj_thr_px:
+            pass  # will drop below
+        else:
+            # Compute robust threshold from error distribution
+            mad = float(np.median(np.abs(errs - median_err)))
+            # 1.4826 scales MAD to match std for Gaussian; 3x is ~99.7%
+            robust_thr = median_err + 3.0 * mad * 1.4826 if mad > 1e-6 else reproj_thr_px
+            effective_thr = max(reproj_thr_px, robust_thr)
+            if max_err <= effective_thr:
+                break
 
         # Drop the worst view and re-solve
         worst = int(np.argmax(errs))

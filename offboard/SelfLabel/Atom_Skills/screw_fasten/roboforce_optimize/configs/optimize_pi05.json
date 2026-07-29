@@ -1,0 +1,52 @@
+{
+    "_description": "pi0.5 optimization config for RTX 5080 (Blackwell)",
+    "model": {
+        "name": "pi05",
+        "pretrained_path": "s3://openpi-assets/checkpoints/pi0_base",
+        "precision": "bf16",
+        "quantization": "fp8",
+        "use_fp4": false,
+        "use_cuda_graph": true,
+        "use_torch_compile": true,
+        "torch_compile_mode": "reduce-overhead",
+        "use_flash_attn": true
+    },
+    "inference": {
+        "batch_size": 1,
+        "warmup_iters": 10,
+        "num_flow_steps": 10,
+        "distilled_flow_steps": 4,
+        "flow_step_schedule": "fixed",
+        "early_stop_convergence": 0.01,
+        "use_tensorrt": false,
+        "tensorrt_engine": "engines/pi05_fp8.engine"
+    },
+    "distillation": {
+        "enabled": false,
+        "teacher_steps": 10,
+        "student_steps": 4,
+        "distill_temperature": 1.0,
+        "distill_weight": 0.5,
+        "mse_weight": 1.0,
+        "schedule": "fixed"
+    },
+    "pipeline": {
+        "async_prefetch": true,
+        "prefetch_depth": 2,
+        "freeze_vlm": true,
+        "action_horizon": 16
+    },
+    "benchmark": {
+        "measure_iters": 500,
+        "warmup_iters": 30,
+        "latency_target_ms": 20,
+        "output_dir": "results/benchmarks/pi05"
+    },
+    "hardware": {
+        "gpu": "RTX 5080",
+        "architecture": "Blackwell",
+        "compute_capability": "12.0",
+        "memory_gb": 16,
+        "notes": "pi0.5 is flow-matching: 10 denoising steps -> ~10x GR00T compute. Distill to 4 steps for 2.5x speedup."
+    }
+}

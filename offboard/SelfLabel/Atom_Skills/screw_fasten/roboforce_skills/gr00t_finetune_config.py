@@ -14,6 +14,10 @@ References:
 Usage:
     python -m roboforce_skills.gr00t_finetune_config --generate_config
     python -m roboforce_skills.gr00t_finetune_config --validate_dataset /path/to/dataset
+
+Optimization (RTX 5080 Blackwell):
+    See roboforce_optimize/ for CUDA Graph, TensorRT FP8/FP4, torch.compile.
+    python -m roboforce_optimize.benchmark_prof --model gr00t --precision fp8
 """
 
 from __future__ import annotations
@@ -57,6 +61,22 @@ class GR00TModelCfg:
     action_chunk_size: int = 16
     """Action chunking window size."""
 
+    # === Inference optimization (Blackwell RTX 5080/5070Ti) ===
+    use_cuda_graph: bool = True
+    """Capture CUDA Graph after warmup to eliminate kernel launch overhead (~1.3x)."""
+    use_torch_compile: bool = True
+    """Apply torch.compile with mode='reduce-overhead' (~1.2x)."""
+    use_flash_attn: bool = True
+    """Enable Flash Attention via torch.backends.cuda."""
+    quantization: str = "bf16"
+    """Inference precision: bf16 | fp16 | fp8 (TensorRT) | fp4 (Blackwell)."""
+    use_tensorrt: bool = False
+    """Use TensorRT engine for inference (requires export first)."""
+    tensorrt_engine_path: str = ""
+    """Path to exported TensorRT engine file."""
+    num_flow_steps: int = 1
+    """GR00T is single-pass (1 step). pi0.5 uses 10."""
+
 
 @dataclass
 class GR00TTrainingCfg:
@@ -85,7 +105,7 @@ class GR00TTrainingCfg:
     # Mixed precision
     fp16: bool = False
     bf16: bool = True
-    """Use bf16 mixed precision (recommended for RTX 5090)."""
+    """Use bf16 mixed precision (recommended for RTX 5080/5090)."""
 
     # Regularization
     dropout: float = 0.1
@@ -196,6 +216,13 @@ def generate_gr00t_config(cfg: GR00TFinetuneCfg | None = None) -> dict:
             "action_dim": cfg.model.action_dim,
             "action_horizon": cfg.model.action_horizon,
             "action_chunk_size": cfg.model.action_chunk_size,
+            # Inference optimization (Blackwell RTX 5080/5070Ti)
+            "use_cuda_graph": cfg.model.use_cuda_graph,
+            "use_torch_compile": cfg.model.use_torch_compile,
+            "use_flash_attn": cfg.model.use_flash_attn,
+            "quantization": cfg.model.quantization,
+            "use_tensorrt": cfg.model.use_tensorrt,
+            "tensorrt_engine_path": cfg.model.tensorrt_engine_path,
         },
 
         # Training
