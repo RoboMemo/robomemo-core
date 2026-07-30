@@ -1,0 +1,45 @@
+{
+    "_description": "GR00T N1.6 optimization config for RTX 5080 (Blackwell)",
+    "model": {
+        "name": "nvidia/GR00T-N1.6-3B",
+        "precision": "bf16",
+        "quantization": "fp8",
+        "use_fp4": false,
+        "use_cuda_graph": true,
+        "use_torch_compile": true,
+        "torch_compile_mode": "reduce-overhead",
+        "use_flash_attn": true
+    },
+    "inference": {
+        "batch_size": 1,
+        "warmup_iters": 10,
+        "use_tensorrt": false,
+        "tensorrt_engine": "engines/gr00t_fp8.engine"
+    },
+    "pipeline": {
+        "async_prefetch": true,
+        "prefetch_depth": 2,
+        "use_nvdec": false,
+        "frame_skip": 1,
+        "action_interpolation": "linear"
+    },
+    "benchmark": {
+        "measure_iters": 1000,
+        "warmup_iters": 50,
+        "latency_target_ms": 20,
+        "output_dir": "results/benchmarks/gr00t"
+    },
+    "hardware": {
+        "gpu": "RTX 5080",
+        "architecture": "Blackwell",
+        "compute_capability": "12.0",
+        "memory_gb": 16,
+        "cuda_version": "12.8",
+        "notes": "FP8 Tensor Cores on Blackwell give ~2x FP16 throughput. FP4 gives ~2x FP8."
+    },
+    "profiling": {
+        "nsight_profile": false,
+        "cuda_event_timing": true,
+        "memory_tracking": true
+    }
+}
