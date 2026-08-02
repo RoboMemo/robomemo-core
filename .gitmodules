@@ -1,0 +1,6 @@
+[submodule "onbroad/Uu_ws/GR00T-WholeBodyControl"]
+	path = onbroad/Uu_ws/GR00T-WholeBodyControl
+	url = https://github.com/civicW/GR00T-WholeBodyControl.git
+[submodule "onbroad/Uu_ws/Isaac-GR00T"]
+	path = onbroad/Uu_ws/Isaac-GR00T
+	url = https://github.com/NVIDIA/Isaac-GR00T.git
