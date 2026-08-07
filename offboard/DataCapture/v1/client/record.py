@@ -53,9 +53,16 @@ def ssh(ip: str, cmd: str, timeout: int = 30) -> subprocess.CompletedProcess:
 
 
 def ensure_board(ip: str) -> None:
-    """Restart cam_demo with --diagnostics + imu_reader so RTSP and board timestamps
-    come from one process. Brief (~5s) RTSP interruption while it restarts."""
-    print(f"[board] restarting cam_demo --diagnostics + imu_reader on {ip}")
+    """Ensure cam_demo --diagnostics + imu_reader are running on the board. Idempotent:
+    if both are already up, skip the restart (fast path). Otherwise restart (~10s)."""
+    check = ssh(ip,
+                "pgrep -f 'cam_demo --diagnostics' >/dev/null && "
+                "pgrep -f bin/imu_reader_demo >/dev/null && echo ALREADY",
+                timeout=8)
+    if "ALREADY" in (check.stdout or ""):
+        print(f"[board] cam_demo --diagnostics + imu_reader already running on {ip} (fast path)")
+        return
+    print(f"[board] starting cam_demo --diagnostics + imu_reader on {ip}")
     ssh(ip, """
 set +e
 cd /root/demo
@@ -370,6 +377,7 @@ def post_episode(api_base: str, dataset: str, episode_id: str, manifest: dict,
     import urllib.request
     cams = manifest.get("cams", [])
     payload = {
+        "id": episode_id,
         "datasetId": dataset or "rdk_x5",
         "name": episode_id,
         "frameCount": cams[0].get("frame_count") if cams else None,
@@ -405,17 +413,34 @@ def main() -> int:
     ap.add_argument("--ws-url", default="ws://localhost:3001")
     ap.add_argument("--api-base", default="http://localhost:3001")
     ap.add_argument("--preview-fps", type=int, default=10)
+    ap.add_argument("--episode-id", default=None,
+                    help="use this episode id/dir name instead of <dataset>_<timestamp>")
+    ap.add_argument("--keep-board", action="store_true",
+                    help="leave cam_demo --diagnostics + imu_reader running after stop (UI flow: fast re-record)")
     args = ap.parse_args()
 
     import datetime
-    episode_id = f"{args.dataset}_{datetime.datetime.now():%Y%m%d_%H%M%S}"
+    episode_id = args.episode_id or f"{args.dataset}_{datetime.datetime.now():%Y%m%d_%H%M%S}"
     out_dir = Path(args.out) / episode_id
     out_dir.mkdir(parents=True, exist_ok=True)
     print(f"[record] episode={episode_id}  dir={out_dir}  duration="
           f"{'∞' if args.duration == 0 else args.duration}s")
 
-    ensure_board(args.ip)
-    truncate_board_logs(args.ip)
+    # Install interrupt handlers before board setup so Ctrl-C during the ~10s board
+    # restart is graceful instead of an ugly KeyboardInterrupt traceback.
+    stop_evt = {"flag": False}
+
+    def _stop(*_):
+        stop_evt["flag"] = True
+    signal.signal(signal.SIGINT, _stop)
+    signal.signal(signal.SIGTERM, _stop)
+
+    try:
+        ensure_board(args.ip)
+        truncate_board_logs(args.ip)
+    except KeyboardInterrupt:
+        print("[record] interrupted during board setup", file=sys.stderr)
+        return 1
 
     urls = [f"rtsp://{args.ip}:{p}{args.path}" for p in args.ports]
     procs = []
@@ -430,13 +455,6 @@ def main() -> int:
                                  stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
         procs.append(p)
         print(f"  cam{i} -> {mp4.name}  (pid {p.pid})")
-
-    stop_evt = {"flag": False}
-
-    def _stop(*_):
-        stop_evt["flag"] = True
-    signal.signal(signal.SIGINT, _stop)
-    signal.signal(signal.SIGTERM, _stop)
 
     streamer = None
     preview_threads: list[threading.Thread] = []
@@ -497,7 +515,8 @@ def main() -> int:
                 print(f"  ffmpeg stderr: {err[:300]}", file=sys.stderr)
 
     manifest = finalize(out_dir, episode_id, args.ip, args.ports, mac_start_ns, mac_end_ns, started_iso)
-    restore_board(args.ip)
+    if not args.keep_board:
+        restore_board(args.ip)
 
     if streamer is not None:
         for t in preview_threads:

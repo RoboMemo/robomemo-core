@@ -355,10 +355,10 @@ app.get('/api/datasets/:id/episodes', (req, res) => {
 // (cam paths, imu path, manifest, source) is carried in the body and stored in
 // episodes.extra, which parseRow auto-merges to top level on read.
 app.post('/api/episodes', (req, res) => {
-  const { datasetId, name, description, frameCount, duration, fps, ...rest } = req.body;
+  const { id, datasetId, name, description, frameCount, duration, fps, ...rest } = req.body;
   if (!datasetId) return res.status(400).json({ error: 'datasetId required' });
   const episode = Episodes.insert({
-    id: `ep_${Date.now()}`,
+    id: id || `ep_${Date.now()}`,
     datasetId,
     name: name || `Episode ${new Date().toISOString()}`,
     description,
@@ -1957,6 +1957,59 @@ app.post('/api/autoannotation/compare', async (req, res) => {
     ],
     confidence: 0.82,
   });
+});
+
+// ========== Recording control (spawn the X5 recorder from the UI) ==========
+// The red Record button in the Collection page hits these endpoints to start/stop
+// `record.py --stream`, which in turn streams the 4-cam + IMU preview back over WS.
+const RECORDER_PATH = process.env.RECORDER_PATH ||
+  path.join(__dirname, '..', '..', 'DataCapture', 'v1', 'client', 'record.py');
+const RECORDER_OUT = process.env.RECORDER_OUT ||
+  path.join(__dirname, '..', '..', 'DataCapture', 'v1', 'client', 'episodes');
+let currentRecording = null; // { proc, episodeId, dataset, logPath }
+
+app.post('/api/record/start', (req, res) => {
+  const { dataset, ip, duration } = req.body || {};
+  const datasetId = dataset || 'rdk_x5_live';
+  if (currentRecording) {
+    return res.status(409).json({ error: 'a recording is already running', episodeId: currentRecording.episodeId });
+  }
+  if (!fs.existsSync(RECORDER_PATH)) {
+    return res.status(500).json({ error: `recorder not found at ${RECORDER_PATH}` });
+  }
+  const episodeId = `ep_${Date.now()}`;
+  fs.mkdirSync(RECORDER_OUT, { recursive: true });
+  const logPath = path.join(RECORDER_OUT, `${episodeId}.recorder.log`);
+  const logFd = fs.openSync(logPath, 'w');
+  const args = [RECORDER_PATH, '--stream',
+    '--duration', String(duration ?? 0),
+    '--dataset', String(datasetId),
+    '--episode-id', episodeId,
+    '--keep-board',
+    '--out', RECORDER_OUT];
+  if (ip) args.push('--ip', String(ip));
+  const proc = spawn('python3', args, { stdio: ['ignore', logFd, logFd] });
+  currentRecording = { proc, episodeId, dataset: datasetId, logPath };
+  proc.on('exit', () => {
+    if (currentRecording && currentRecording.proc === proc) currentRecording = null;
+  });
+  res.status(201).json({ episodeId, pid: proc.pid, dataset: datasetId, logPath });
+});
+
+app.post('/api/record/stop', (req, res) => {
+  if (!currentRecording) return res.status(404).json({ error: 'no recording running' });
+  const { proc, episodeId } = currentRecording;
+  const finish = () => { if (currentRecording && currentRecording.proc === proc) currentRecording = null; };
+  const hardKill = setTimeout(() => { try { proc.kill('SIGKILL'); } catch (_e) {} finish(); }, 25000);
+  proc.once('exit', () => { clearTimeout(hardKill); finish(); });
+  try { proc.kill('SIGINT'); } catch (_e) { /* already gone */ }
+  res.json({ episodeId, finalizing: true });
+});
+
+app.get('/api/record/status', (req, res) => {
+  res.json(currentRecording
+    ? { running: true, episodeId: currentRecording.episodeId, dataset: currentRecording.dataset }
+    : { running: false });
 });
 
 const server = app.listen(port, () => {

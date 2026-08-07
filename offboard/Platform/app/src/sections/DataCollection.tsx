@@ -38,7 +38,7 @@ export default function DataCollection() {
   const [simulators, setSimulators] = useState<Simulator[]>([]);
   const [selectedDataset, setSelectedDataset] = useState<string>('');
   const [selectedSimulator, setSelectedSimulator] = useState<string>('');
-  const [robotIP, setRobotIP] = useState<string>('192.168.1.100');
+  const [robotIP, setRobotIP] = useState<string>('192.168.1.12');
   const [collectionMode, setCollectionMode] = useState<'real' | 'simulation'>('simulation');
   const [isReconnecting, setIsReconnecting] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState<'disconnected' | 'connected' | 'connecting'>('disconnected');
@@ -77,7 +77,7 @@ export default function DataCollection() {
         });
       }
 
-      if (recording.isRecording && !recording.isPaused) {
+      if (recording.isRecording && !recording.isPaused && data.sensorType === 'cam0') {
         setRecording(prev => ({
           ...prev,
           frameCount: prev.frameCount + 1
@@ -132,27 +132,26 @@ export default function DataCollection() {
   };
 
   const startRecording = async () => {
-    if (!selectedDataset) {
-      alert('Please select a dataset first');
-      return;
+    const dataset = selectedDataset || 'rdk_x5_live';
+    try {
+      const r = await api.startRecording({ dataset, ip: robotIP });
+      setRecording({
+        isRecording: true,
+        isPaused: false,
+        episodeId: r.episodeId,
+        frameCount: 0,
+        startTime: Date.now(),
+        duration: 0,
+      });
+      durationInterval.current = setInterval(() => {
+        setRecording(prev => ({
+          ...prev,
+          duration: prev.startTime ? Math.floor((Date.now() - prev.startTime) / 1000) : 0,
+        }));
+      }, 1000);
+    } catch (e: any) {
+      alert(`Failed to start recording: ${e?.message || e}`);
     }
-
-    const episodeId = `episode_${Date.now()}`;
-    setRecording({
-      isRecording: true,
-      isPaused: false,
-      episodeId,
-      frameCount: 0,
-      startTime: Date.now(),
-      duration: 0
-    });
-
-    durationInterval.current = setInterval(() => {
-      setRecording(prev => ({
-        ...prev,
-        duration: prev.startTime ? Math.floor((Date.now() - prev.startTime) / 1000) : 0
-      }));
-    }, 1000);
   };
 
   const pauseRecording = () => {
@@ -163,13 +162,10 @@ export default function DataCollection() {
     if (durationInterval.current) {
       clearInterval(durationInterval.current);
     }
-
-    if (recording.episodeId) {
-      try {
-        console.log('Saving episode:', recording.episodeId);
-      } catch (error) {
-        console.error('Failed to save episode:', error);
-      }
+    try {
+      await api.stopRecording();
+    } catch (error) {
+      console.error('Failed to stop recording:', error);
     }
 
     setRecording({
@@ -395,10 +391,9 @@ export default function DataCollection() {
             
             <div className="flex items-center gap-2">
               {!recording.isRecording ? (
-                <Button 
-                  size="lg" 
+                <Button
+                  size="lg"
                   onClick={startRecording}
-                  disabled={!selectedDataset}
                   className="bg-red-500 hover:bg-red-600"
                 >
                   <Circle className="w-5 h-5 mr-2 fill-current" />

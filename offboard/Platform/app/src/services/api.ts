@@ -183,6 +183,19 @@ class ApiService {
     });
   }
 
+  /** Recording control: the Collection page Record/Stop buttons drive the X5 recorder. */
+  async startRecording(payload: { dataset?: string; ip?: string; duration?: number }): Promise<{ episodeId: string; pid: number; dataset: string; logPath: string }> {
+    return this.fetch('/record/start', { method: 'POST', body: JSON.stringify(payload) });
+  }
+
+  async stopRecording(): Promise<{ episodeId: string; finalizing: boolean }> {
+    return this.fetch('/record/stop', { method: 'POST' });
+  }
+
+  async getRecordingStatus(): Promise<{ running: boolean; episodeId?: string; dataset?: string }> {
+    return this.fetch('/record/status');
+  }
+
   // Collections
   async getCollections(): Promise<Collection[]> {
     return this.fetch('/collections');
