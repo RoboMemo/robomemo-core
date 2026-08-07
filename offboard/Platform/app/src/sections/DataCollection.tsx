@@ -1,17 +1,19 @@
 import { useState, useEffect, useRef } from 'react';
-import { 
-  Play, 
-  Pause, 
-  Square, 
-  Circle, 
-  Camera, 
+import {
+  Play,
+  Pause,
+  Square,
+  Circle,
+  Camera,
   Settings,
   RotateCcw,
   MonitorPlay,
   Radio,
   Grip,
-  Hand
+  Hand,
+  Activity
 } from 'lucide-react';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -49,20 +51,32 @@ export default function DataCollection() {
     duration: 0
   });
   const [sensorData, setSensorData] = useState<Record<string, any>>({});
+  const [imuHistory, setImuHistory] = useState<Array<{ t: number; ax: number; ay: number; az: number; gx: number; gy: number; gz: number }>>([]);
+  const [streamStatus, setStreamStatus] = useState<{ state: string; episodeId?: string; dataset?: string } | null>(null);
   const [activeSensors, setActiveSensors] = useState<string[]>(['rgb', 'depth', 'force_torque']);
   const durationInterval = useRef<ReturnType<typeof setInterval> | null>(null);
-  
-  const { isConnected: _isConnected, on } = useWebSocket('collector');
+
+  const { isConnected, on } = useWebSocket('collector');
 
   useEffect(() => {
     loadData();
-    
-    const unsubscribe = on('sensor_data', (data) => {
+
+    const unsubscribeSensor = on('sensor_data', (data) => {
       setSensorData(prev => ({
         ...prev,
         [data.sensorType]: data
       }));
-      
+
+      // X5 IMU stream: keep a short rolling window for the accel + gyro charts.
+      if (data.sensorType === 'imu' && Array.isArray(data.accel_mps2)) {
+        const [ax, ay, az] = data.accel_mps2;
+        const [gx, gy, gz] = Array.isArray(data.gyro_rps) ? data.gyro_rps : [0, 0, 0];
+        setImuHistory(prev => {
+          const next = [...prev, { t: data.ts_ns ?? prev.length, ax, ay, az, gx, gy, gz }];
+          return next.length > 150 ? next.slice(next.length - 150) : next;
+        });
+      }
+
       if (recording.isRecording && !recording.isPaused) {
         setRecording(prev => ({
           ...prev,
@@ -71,8 +85,13 @@ export default function DataCollection() {
       }
     });
 
+    const unsubscribeStatus = on('recording_status', (data: any) => {
+      setStreamStatus({ state: data.state, episodeId: data.episodeId, dataset: data.dataset });
+    });
+
     return () => {
-      unsubscribe?.();
+      unsubscribeSensor?.();
+      unsubscribeStatus?.();
       if (durationInterval.current) {
         clearInterval(durationInterval.current);
       }
@@ -409,125 +428,129 @@ export default function DataCollection() {
         </CardContent>
       </Card>
 
-      {/* Sensor Visualization */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-        {activeSensors.includes('rgb') && (
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm flex items-center gap-2">
-                <Camera className="w-4 h-4" />
-                RGB Camera
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="aspect-video bg-muted rounded-lg flex items-center justify-center">
-                {sensorData.rgb?.image ? (
-                  <img 
-                    src={sensorData.rgb.image} 
-                    alt="RGB" 
-                    className="w-full h-full object-cover rounded-lg"
-                  />
-                ) : (
-                  <div className="text-center">
-                    <Camera className="w-8 h-8 text-muted-foreground mx-auto mb-2" />
-                    <p className="text-sm text-muted-foreground">Waiting for data...</p>
-                  </div>
-                )}
-              </div>
-              <div className="mt-2 text-xs text-muted-foreground">
-                <p>Resolution: 640x480 @ 30fps</p>
-                <p>Location: wrist</p>
-              </div>
-            </CardContent>
-          </Card>
-        )}
+      {/* Live Preview — RDK X5 (4 RGB cameras + IMU), fed by record.py --stream */}
+      <Card>
+        <CardHeader className="pb-2">
+          <div className="flex items-center justify-between">
+            <CardTitle className="text-lg flex items-center gap-2">
+              <Radio className="w-5 h-5" />
+              Live Preview — RDK X5
+            </CardTitle>
+            <div className="flex items-center gap-2">
+              <Badge variant={isConnected ? 'default' : 'secondary'}>
+                {isConnected ? 'WS connected' : 'WS disconnected'}
+              </Badge>
+              {streamStatus?.state === 'recording' ? (
+                <Badge variant="destructive">
+                  <Circle className="w-3 h-3 mr-1 fill-current" />
+                  Recording{streamStatus.episodeId ? ` · ${streamStatus.episodeId.slice(-8)}` : ''}
+                </Badge>
+              ) : streamStatus?.state === 'stopped' ? (
+                <Badge variant="secondary">Stopped</Badge>
+              ) : (
+                <Badge variant="outline">Live preview</Badge>
+              )}
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {[0, 1, 2, 3].map((i) => {
+              const key = `cam${i}`;
+              const shot = sensorData[key];
+              return (
+                <Card key={key} className="overflow-hidden">
+                  <CardHeader className="pb-1 pt-2">
+                    <CardTitle className="text-xs flex items-center gap-2">
+                      <Camera className="w-3.5 h-3.5" /> {key}
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="p-2">
+                    <div className="aspect-video bg-muted rounded-md flex items-center justify-center overflow-hidden">
+                      {shot?.image ? (
+                        <img src={shot.image} alt={key} className="w-full h-full object-cover rounded-md" />
+                      ) : (
+                        <div className="text-center">
+                          <Camera className="w-7 h-7 text-muted-foreground mx-auto mb-1" />
+                          <p className="text-xs text-muted-foreground">Waiting for stream…</p>
+                        </div>
+                      )}
+                    </div>
+                  </CardContent>
+                </Card>
+              );
+            })}
+          </div>
 
-        {activeSensors.includes('depth') && (
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm flex items-center gap-2">
-                <Camera className="w-4 h-4" />
-                Depth Camera
+          {/* IMU accel timeseries */}
+          <Card className="mt-3">
+            <CardHeader className="pb-1 pt-3">
+              <CardTitle className="text-xs flex items-center gap-2">
+                <Activity className="w-3.5 h-3.5" /> IMU accel (m/s²)
+                <span className="ml-auto text-[10px] font-normal text-muted-foreground">
+                  {imuHistory.length
+                    ? `|a| ≈ ${Math.hypot(
+                        imuHistory[imuHistory.length - 1].ax,
+                        imuHistory[imuHistory.length - 1].ay,
+                        imuHistory[imuHistory.length - 1].az,
+                      ).toFixed(2)}`
+                    : '—'}
+                </span>
               </CardTitle>
             </CardHeader>
-            <CardContent>
-              <div className="aspect-video bg-muted rounded-lg flex items-center justify-center">
-                {sensorData.depth?.image ? (
-                  <img 
-                    src={sensorData.depth.image} 
-                    alt="Depth" 
-                    className="w-full h-full object-cover rounded-lg"
-                  />
-                ) : (
-                  <div className="text-center">
-                    <Camera className="w-8 h-8 text-muted-foreground mx-auto mb-2" />
-                    <p className="text-sm text-muted-foreground">Waiting for data...</p>
-                  </div>
-                )}
-              </div>
-              <div className="mt-2 text-xs text-muted-foreground">
-                <p>Resolution: 640x480 @ 30fps</p>
-                <p>Range: 0.1m - 10m</p>
+            <CardContent className="p-2">
+              <div className="h-44">
+                <ResponsiveContainer width="100%" height="100%">
+                  <LineChart data={imuHistory}>
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis dataKey="t" tick={false} height={0} />
+                    <YAxis domain={[-20, 20]} width={32} />
+                    <Tooltip />
+                    <Legend />
+                    <Line type="monotone" dataKey="ax" stroke="#ef4444" name="ax" dot={false} isAnimationActive={false} />
+                    <Line type="monotone" dataKey="ay" stroke="#22c55e" name="ay" dot={false} isAnimationActive={false} />
+                    <Line type="monotone" dataKey="az" stroke="#3b82f6" name="az" dot={false} isAnimationActive={false} />
+                  </LineChart>
+                </ResponsiveContainer>
               </div>
             </CardContent>
           </Card>
-        )}
 
-        {activeSensors.includes('force_torque') && (
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm flex items-center gap-2">
-                <Grip className="w-4 h-4" />
-                Force/Torque Sensor
+          {/* IMU gyro (angular velocity) timeseries */}
+          <Card className="mt-3">
+            <CardHeader className="pb-1 pt-3">
+              <CardTitle className="text-xs flex items-center gap-2">
+                <Activity className="w-3.5 h-3.5" /> IMU gyro (rad/s)
+                <span className="ml-auto text-[10px] font-normal text-muted-foreground">
+                  {imuHistory.length
+                    ? `|ω| ≈ ${Math.hypot(
+                        imuHistory[imuHistory.length - 1].gx,
+                        imuHistory[imuHistory.length - 1].gy,
+                        imuHistory[imuHistory.length - 1].gz,
+                      ).toFixed(3)}`
+                    : '—'}
+                </span>
               </CardTitle>
             </CardHeader>
-            <CardContent>
-              <div className="space-y-3">
-                <div>
-                  <div className="flex justify-between text-xs mb-1">
-                    <span>Force X</span>
-                    <span>{(sensorData.force_torque?.force?.[0] || 0).toFixed(2)} N</span>
-                  </div>
-                  <div className="h-2 bg-muted rounded-full overflow-hidden">
-                    <div 
-                      className="h-full bg-primary transition-all"
-                      style={{ width: `${Math.min(Math.abs(sensorData.force_torque?.force?.[0] || 0) / 100 * 50 + 50, 100)}%` }}
-                    />
-                  </div>
-                </div>
-                <div>
-                  <div className="flex justify-between text-xs mb-1">
-                    <span>Force Y</span>
-                    <span>{(sensorData.force_torque?.force?.[1] || 0).toFixed(2)} N</span>
-                  </div>
-                  <div className="h-2 bg-muted rounded-full overflow-hidden">
-                    <div 
-                      className="h-full bg-primary transition-all"
-                      style={{ width: `${Math.min(Math.abs(sensorData.force_torque?.force?.[1] || 0) / 100 * 50 + 50, 100)}%` }}
-                    />
-                  </div>
-                </div>
-                <div>
-                  <div className="flex justify-between text-xs mb-1">
-                    <span>Force Z</span>
-                    <span>{(sensorData.force_torque?.force?.[2] || 0).toFixed(2)} N</span>
-                  </div>
-                  <div className="h-2 bg-muted rounded-full overflow-hidden">
-                    <div 
-                      className="h-full bg-primary transition-all"
-                      style={{ width: `${Math.min(Math.abs(sensorData.force_torque?.force?.[2] || 0) / 100 * 50 + 50, 100)}%` }}
-                    />
-                  </div>
-                </div>
-              </div>
-              <div className="mt-3 text-xs text-muted-foreground">
-                <p>Frequency: 1000Hz</p>
-                <p>Location: wrist</p>
+            <CardContent className="p-2">
+              <div className="h-40">
+                <ResponsiveContainer width="100%" height="100%">
+                  <LineChart data={imuHistory}>
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis dataKey="t" tick={false} height={0} />
+                    <YAxis width={32} />
+                    <Tooltip />
+                    <Legend />
+                    <Line type="monotone" dataKey="gx" stroke="#ef4444" name="gx" dot={false} isAnimationActive={false} />
+                    <Line type="monotone" dataKey="gy" stroke="#22c55e" name="gy" dot={false} isAnimationActive={false} />
+                    <Line type="monotone" dataKey="gz" stroke="#3b82f6" name="gz" dot={false} isAnimationActive={false} />
+                  </LineChart>
+                </ResponsiveContainer>
               </div>
             </CardContent>
           </Card>
-        )}
-      </div>
+        </CardContent>
+      </Card>
     </div>
   );
 }

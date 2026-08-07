@@ -351,6 +351,26 @@ app.get('/api/datasets/:id/episodes', (req, res) => {
   res.json(Episodes.getByDataset(req.params.id));
 });
 
+// Create an episode directly (e.g. from the X5 recorder). Recording metadata
+// (cam paths, imu path, manifest, source) is carried in the body and stored in
+// episodes.extra, which parseRow auto-merges to top level on read.
+app.post('/api/episodes', (req, res) => {
+  const { datasetId, name, description, frameCount, duration, fps, ...rest } = req.body;
+  if (!datasetId) return res.status(400).json({ error: 'datasetId required' });
+  const episode = Episodes.insert({
+    id: `ep_${Date.now()}`,
+    datasetId,
+    name: name || `Episode ${new Date().toISOString()}`,
+    description,
+    frameCount,
+    duration,
+    fps,
+    createdAt: new Date().toISOString(),
+    extra: rest,
+  });
+  res.status(201).json(episode);
+});
+
 // ========== COLLECTIONS API ==========
 
 app.get('/api/collections', (req, res) => {
@@ -1939,10 +1959,41 @@ app.post('/api/autoannotation/compare', async (req, res) => {
   });
 });
 
-app.listen(port, () => {
+const server = app.listen(port, () => {
   console.log(`Backend server running at http://localhost:${port}`);
   console.log('[DB] SQLite ready —', require('./db').getStats());
 });
+
+// ========== WebSocket server (live sensor preview / recording status) ==========
+// Frontend useWebSocket() connects to ws://localhost:3001 and subscribes to
+// 'sensor_data' / 'recording_status'. The recorder (or a simulator) publishes
+// those messages; here we relay each one to every other connected client.
+const { WebSocketServer } = require('ws');
+const wss = new WebSocketServer({ server });
+wss.on('connection', (ws) => {
+  ws.on('message', (raw) => {
+    let msg;
+    try {
+      msg = JSON.parse(raw.toString());
+    } catch (_e) {
+      return;
+    }
+    if (msg.type === 'register') {
+      ws.clientType = msg.clientType || 'unknown';
+      return;
+    }
+    if (['sensor_data', 'recording_status', 'simulation_frame'].includes(msg.type)) {
+      const out = JSON.stringify(msg);
+      for (const client of wss.clients) {
+        if (client !== ws && client.readyState === 1) {
+          client.send(out);
+        }
+      }
+    }
+  });
+  ws.on('error', () => { /* swallow socket errors on disconnect */ });
+});
+console.log(`[WS] WebSocket server listening on ws://localhost:${port}`);
 
 // GenRobot Dataset API
 app.get('/api/datasets/genrobot', (req, res) => {

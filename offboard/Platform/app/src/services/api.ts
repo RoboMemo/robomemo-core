@@ -167,6 +167,22 @@ class ApiService {
     return this.fetch(`/datasets/${datasetId}/episodes`);
   }
 
+  /** Create an episode directly (used by the X5 recorder). Recording metadata
+   * (camPaths, imuPath, manifest, source) rides in the payload → episodes.extra. */
+  async createEpisode(payload: {
+    datasetId: string;
+    name?: string;
+    frameCount?: number;
+    duration?: number;
+    fps?: number;
+    [key: string]: any;
+  }): Promise<Episode> {
+    return this.fetch('/episodes', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
   // Collections
   async getCollections(): Promise<Collection[]> {
     return this.fetch('/collections');
